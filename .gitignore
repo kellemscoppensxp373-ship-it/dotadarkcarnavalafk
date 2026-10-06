@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Build artefacts
+build/
+dist/
+*.spec.bak
+
+# Runtime state (the agent's brain, settings, logs, script backups)
+data/
+*.log
+
+# Captured frames / debug dumps
+debug/
+*.png.debug
+
+# Real game assets are copyrighted — only placeholders are tracked
+assets/emoji/*.png
+assets/portraits/*.png
+!assets/**/.gitkeep
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
