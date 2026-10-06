@@ -303,6 +303,36 @@ def _module(name: str, **attrs) -> types.ModuleType:
     return mod
 
 
+class _ProgressBar(_Widget):
+    """Минимальная модель QProgressBar: диапазон, значение и видимость."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._min, self._max, self._value = 0, 100, 0
+        self._visible = True
+
+    def setRange(self, lo, hi):
+        self._min, self._max = lo, hi
+
+    def setValue(self, value):
+        self._value = value
+
+    def value(self):
+        return self._value
+
+    def maximum(self):
+        return self._max
+
+    def show(self):
+        self._visible = True
+
+    def hide(self):
+        self._visible = False
+
+    def isVisible(self):
+        return self._visible
+
+
 class _Label(_Widget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -347,6 +377,7 @@ def install() -> None:
         QMainWindow=type("QMainWindow", (_Widget,), {}),
         QMessageBox=_MessageBox,
         QPlainTextEdit=_TextEdit,
+        QProgressBar=_ProgressBar,
         QPushButton=_Button,
         QSpinBox=_SpinBox,
     )

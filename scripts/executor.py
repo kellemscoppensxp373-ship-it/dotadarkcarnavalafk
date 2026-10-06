@@ -335,7 +335,12 @@ class Executor:
             self.click_intent("accept")
 
     def handle_hero_pick(self) -> None:
-        """Dual-asset hero selection: search by RU name, confirm by 3D portrait."""
+        """Выбор героя: поиск по имени, подтверждение по 3D-портрету.
+
+        Имя в таблице билетов может быть записано по-русски или по-английски
+        («Призрачный Король» и «Wraith King» — один герой), поэтому в поле поиска
+        поочерёдно пробуются все известные написания, пока герой не найдётся.
+        """
         hero = self.current_hero
         if hero is None:
             if not self._plan_cycle():
@@ -343,36 +348,53 @@ class Executor:
             hero = self.current_hero
         self.log(f"берём героя «{hero.name_ru}»")
 
-        # 1) Focus the search field by reading its Russian label.
-        search = self.find("search_hero", region_name="hero_search")
-        if search is not None:
-            self.inputs.click_hit(search)
-            self.inputs.clear_field()
-            self.inputs.type_text(hero.name_ru)   # Cyrillic-safe (clipboard path)
-            self.sleep(0.8)
+        candidates = self._hero_search_names(hero)
+        picked = False
+        for attempt, term in enumerate(candidates, start=1):
+            if attempt > 1:
+                self.log(f"пробую другое написание: «{term}»", "warning")
 
-        # 2) Confirm the hero visually via the high-res PORTRAIT asset in the pick grid.
-        picked = self._click_hero_portrait(hero)
-        if not picked:
-            # 3) Fall back to reading the hero's localised name in the grid.
-            self.log("портрет не распознан — ищу героя по названию (OCR)", "warning")
-            name_hit = None
-            for candidate in hero.all_names_ru:
-                name_hit = self.vision.find_text(candidate, region=self.region("hero_grid"), fresh=True)
-                if name_hit is not None:
-                    break
-            if name_hit is not None:
-                self.inputs.click_hit(name_hit)
+            # 1) Навести фокус на поле поиска, прочитав его русскую подпись.
+            search = self.find("search_hero", region_name="hero_search")
+            if search is not None:
+                self.inputs.click_hit(search)
+                self.inputs.clear_field()
+                self.inputs.type_text(term)   # кириллица идёт через буфер обмена
+                self.sleep(0.8)
+
+            # 2) Подтвердить героя портретом (двойной набор ассетов, этап 3).
+            if self._click_hero_portrait(hero):
                 picked = True
+                break
+
+            # 3) Запасной путь — прочитать подпись героя в сетке через OCR.
+            self.log("портрет не распознан — ищу героя по названию (OCR)", "warning")
+            for candidate in candidates:
+                name_hit = self.vision.find_text(
+                    candidate, region=self.region("hero_grid"), fresh=True)
+                if name_hit is not None:
+                    self.inputs.click_hit(name_hit)
+                    picked = True
+                    break
+            if picked:
+                break
 
         if picked:
             self.sleep(0.6)
             self.click_intent("lock_in", region_name="hero_grid")
             self.click_intent("ready")
         else:
-            self.log(f"не удалось выбрать «{hero.name_ru}» — герой будет назначен автоматически", "error")
+            self.log(f"не удалось выбрать «{hero.name_ru}» — герой будет назначен автоматически",
+                     "error")
             if self.brain is not None:
                 self.brain.bump("hero_pick_failures")
+
+    def _hero_search_names(self, hero: Any) -> list[str]:
+        """Все написания имени героя в порядке приоритета (русское — первым)."""
+        names = list(getattr(hero, "search_names", ()) or getattr(hero, "all_names_ru", ()))
+        if not names:
+            names = [hero.name_ru]
+        return [n for n in dict.fromkeys(names) if n]
 
     def _click_hero_portrait(self, hero: Any) -> bool:
         """Locate the hero's 3D portrait in the pick grid (Phase 3 dual-asset)."""

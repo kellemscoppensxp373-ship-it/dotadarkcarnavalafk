@@ -39,6 +39,183 @@ from tickets import (  # noqa: E402  (внешний скрипт-сосед, з
 )
 
 # --------------------------------------------------------------------------------------
+# Двуязычный справочник имён героев
+# --------------------------------------------------------------------------------------
+#
+# Клиент русский, но в поле поиска Dota принимает и английские названия, а оператору
+# удобнее вписывать то, что он помнит. Поэтому имя героя из таблицы билетов может быть
+# на любом языке: ниже соответствие EN → RU, а бот при выборе героя пробует оба
+# варианта по очереди и в довершение сверяет результат чтением названия в сетке.
+
+HERO_NAMES_EN_RU: dict[str, str] = {
+    'Abaddon': 'Абаддон',
+    'Alchemist': 'Алхимик',
+    'Ancient Apparition': 'Древний Призрак',
+    'Anti-Mage': 'Антимаг',
+    'Arc Warden': 'Арк Варден',
+    'Axe': 'Акс',
+    'Bane': 'Бэйн',
+    'Batrider': 'Бэтрайдер',
+    'Beastmaster': 'Повелитель Зверей',
+    'Bloodseeker': 'Кровосек',
+    'Bounty Hunter': 'Охотник за Головами',
+    'Brewmaster': 'Брюмастер',
+    'Bristleback': 'Бристлбэк',
+    'Broodmother': 'Бруд',
+    'Centaur Warrunner': 'Кентавр',
+    'Chaos Knight': 'Рыцарь Хаоса',
+    'Chen': 'Чен',
+    'Clinkz': 'Клинкз',
+    'Clockwerk': 'Клокверк',
+    'Crystal Maiden': 'Кристал Мейден',
+    'Dark Seer': 'Дарк Сир',
+    'Dark Willow': 'Дарк Виллоу',
+    'Dawnbreaker': 'Донбрейкер',
+    'Dazzle': 'Дазл',
+    'Death Prophet': 'Пророк Смерти',
+    'Disruptor': 'Дизраптор',
+    'Doom': 'Дум',
+    'Dragon Knight': 'Драконий Рыцарь',
+    'Drow Ranger': 'Дроу Рейнджер',
+    'Earth Spirit': 'Дух Земли',
+    'Earthshaker': 'Эртшейкер',
+    'Elder Titan': 'Элдер Титан',
+    'Ember Spirit': 'Дух Огня',
+    'Enchantress': 'Энчантресс',
+    'Enigma': 'Энигма',
+    'Faceless Void': 'Фейслесс Войд',
+    'Grimstroke': 'Гримстроук',
+    'Gyrocopter': 'Гирокоптер',
+    'Hoodwink': 'Худвинк',
+    'Huskar': 'Хускар',
+    'Invoker': 'Инвокер',
+    'Io': 'Ио',
+    'Jakiro': 'Джакиро',
+    'Juggernaut': 'Джаггернаут',
+    'Keeper of the Light': 'Хранитель Света',
+    'Kunkka': 'Кунка',
+    'Legion Commander': 'Легион Коммандер',
+    'Leshrac': 'Лешрак',
+    'Lich': 'Лич',
+    'Lifestealer': 'Лайфстилер',
+    'Lina': 'Лина',
+    'Lion': 'Лион',
+    'Lone Druid': 'Лоун Друид',
+    'Luna': 'Луна',
+    'Lycan': 'Ликан',
+    'Magnus': 'Магнус',
+    'Marci': 'Марси',
+    'Mars': 'Марс',
+    'Medusa': 'Медуза',
+    'Meepo': 'Мипо',
+    'Mirana': 'Мирана',
+    'Monkey King': 'Король Обезьян',
+    'Morphling': 'Морфлинг',
+    'Muerta': 'Муэрта',
+    'Naga Siren': 'Нага Сирена',
+    "Nature's Prophet": 'Фурион',
+    'Necrophos': 'Некрофос',
+    'Night Stalker': 'Найт Сталкер',
+    'Nyx Assassin': 'Никс Ассасин',
+    'Ogre Magi': 'Огр Маг',
+    'Omniknight': 'Омникнайт',
+    'Oracle': 'Оракул',
+    'Outworld Destroyer': 'Аутворлд Дестроер',
+    'Pangolier': 'Панголир',
+    'Phantom Assassin': 'Фантом Ассасин',
+    'Phantom Lancer': 'Фантом Лансер',
+    'Phoenix': 'Феникс',
+    'Primal Beast': 'Праймал Бист',
+    'Puck': 'Пак',
+    'Pudge': 'Пудж',
+    'Pugna': 'Пугна',
+    'Queen of Pain': 'Королева Боли',
+    'Razor': 'Рейзор',
+    'Riki': 'Рики',
+    'Rubick': 'Рубик',
+    'Sand King': 'Сэнд Кинг',
+    'Shadow Demon': 'Шэдоу Демон',
+    'Shadow Fiend': 'Шэдоу Фиенд',
+    'Shadow Shaman': 'Шэдоу Шаман',
+    'Silencer': 'Сайленсер',
+    'Skywrath Mage': 'Скайврат Маг',
+    'Slardar': 'Слардар',
+    'Slark': 'Сларк',
+    'Snapfire': 'Снапфайр',
+    'Sniper': 'Снайпер',
+    'Spectre': 'Спектра',
+    'Spirit Breaker': 'Спирит Брейкер',
+    'Storm Spirit': 'Дух Бури',
+    'Sven': 'Свен',
+    'Techies': 'Техис',
+    'Templar Assassin': 'Темплар Ассасин',
+    'Terrorblade': 'Террорблейд',
+    'Tidehunter': 'Тайдхантер',
+    'Timbersaw': 'Тимберсо',
+    'Tinker': 'Тинкер',
+    'Tiny': 'Тини',
+    'Treant Protector': 'Трент Протектор',
+    'Troll Warlord': 'Тролль Варлорд',
+    'Tusk': 'Таск',
+    'Underlord': 'Андерлорд',
+    'Undying': 'Андаинг',
+    'Ursa': 'Урса',
+    'Vengeful Spirit': 'Вендж',
+    'Venomancer': 'Веномансер',
+    'Viper': 'Вайпер',
+    'Visage': 'Визаж',
+    'Void Spirit': 'Дух Пустоты',
+    'Warlock': 'Варлок',
+    'Weaver': 'Уивер',
+    'Windranger': 'Виндрейнджер',
+    'Winter Wyvern': 'Винтер Виверна',
+    'Witch Doctor': 'Витч Доктор',
+    'Wraith King': 'Призрачный Король',
+    'Zeus': 'Зевс',
+}
+
+HERO_NAMES_RU_EN: dict[str, str] = {ru: en for en, ru in HERO_NAMES_EN_RU.items()}
+
+
+def translate_hero_name(name: str) -> tuple[str, str]:
+    """Вернуть пару ``(русское имя, английское имя)`` для любого написания.
+
+    Опознаёт как английский, так и русский ввод, терпит опечатки и ошибки OCR
+    («Abadon» → «Abaddon»). Неизвестное имя возвращается как есть — герой всё
+    равно будет найден по сетке выбора.
+    """
+    try:
+        from vision import text_similarity
+    except Exception:  # pragma: no cover
+        from difflib import SequenceMatcher
+
+        def text_similarity(a: str, b: str) -> float:
+            return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
+
+    probe = (name or "").strip()
+    if not probe:
+        return ("", "")
+
+    best_en, best_en_score = "", 0.0
+    for en in HERO_NAMES_EN_RU:
+        score = text_similarity(probe, en)
+        if score > best_en_score:
+            best_en, best_en_score = en, score
+
+    best_ru, best_ru_score = "", 0.0
+    for ru in HERO_NAMES_RU_EN:
+        score = text_similarity(probe, ru)
+        if score > best_ru_score:
+            best_ru, best_ru_score = ru, score
+
+    if max(best_en_score, best_ru_score) < 0.86:
+        return (probe, probe)
+    if best_en_score >= best_ru_score:
+        return (HERO_NAMES_EN_RU[best_en], best_en)
+    return (best_ru, HERO_NAMES_RU_EN[best_ru])
+
+
+# --------------------------------------------------------------------------------------
 # ЭТАП 3 — РЕЕСТР ГЕРОЕВ С ДВУМЯ НАБОРАМИ СПРАЙТОВ
 # --------------------------------------------------------------------------------------
 #
@@ -129,6 +306,7 @@ class Hero:
 
     key: str
     name_ru: str
+    name_en: str = ""
     emoji_img: str = ""
     portrait_img: str = ""
     aliases_ru: tuple[str, ...] = ()
@@ -138,6 +316,20 @@ class Hero:
     @property
     def all_names_ru(self) -> tuple[str, ...]:
         return (self.name_ru, *self.aliases_ru)
+
+    @property
+    def search_names(self) -> tuple[str, ...]:
+        """Что по очереди вводить в поиск героев: русское, английское, прозвища."""
+        seen: list[str] = []
+        for candidate in (self.name_ru, self.name_en, *self.aliases_ru):
+            if candidate and candidate not in seen:
+                seen.append(candidate)
+        return tuple(seen)
+
+    @property
+    def all_names(self) -> tuple[str, ...]:
+        """Все написания — для сверки прочитанного OCR в сетке выбора."""
+        return self.search_names
 
     @property
     def has_assets(self) -> bool:
@@ -159,6 +351,7 @@ def get_hero(key: str) -> Hero:
     return Hero(
         key=key,
         name_ru=row["name_ru"],
+        name_en=translate_hero_name(row["name_ru"])[1],
         emoji_img=row.get("emoji_img", ""),
         portrait_img=row.get("portrait_img", ""),
         aliases_ru=tuple(row.get("aliases_ru", ())),
@@ -197,10 +390,17 @@ def resolve_hero(name_ru: str) -> Hero:
     вводится в поиск, а выбор подтверждается чтением названия в сетке (OCR).
     Так бот поддерживает любого из 120+ героев, не требуя заранее нарезанных PNG.
     """
-    known = find_hero_by_ru(name_ru, min_score=0.88)
+    ru, en = translate_hero_name(name_ru)
+    known = find_hero_by_ru(ru, min_score=0.88) or find_hero_by_ru(name_ru, min_score=0.88)
     if known is not None:
-        return known
-    return Hero(key=_slug(name_ru), name_ru=name_ru.strip())
+        # У героя из реестра есть спрайты — дополним английским написанием.
+        return Hero(
+            key=known.key, name_ru=known.name_ru, name_en=en or known.name_en,
+            emoji_img=known.emoji_img, portrait_img=known.portrait_img,
+            aliases_ru=known.aliases_ru, role=known.role,
+            bot_difficulty=known.bot_difficulty,
+        )
+    return Hero(key=_slug(en or ru), name_ru=ru, name_en=en)
 
 
 def emoji_asset_map(assets_dir: str = "assets") -> dict[str, str]:
@@ -355,6 +555,7 @@ class LoopConfig:
 __all__ = [
     # Герои
     "HERO_DB", "Hero", "get_hero", "all_heroes", "find_hero_by_ru", "resolve_hero",
+    "HERO_NAMES_EN_RU", "HERO_NAMES_RU_EN", "translate_hero_name",
     "emoji_asset_map", "portrait_asset_map",
     # Билеты (реэкспорт из tickets.py)
     "ARCANA", "YIELDS", "DEFAULT_MIN_YIELD", "TicketBook", "TicketGoal", "Pick",

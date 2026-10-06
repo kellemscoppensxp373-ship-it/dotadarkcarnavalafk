@@ -73,6 +73,12 @@ jobs:
           Copy-Item -Recurse -Force assets  "$out/assets"
           Copy-Item -Force requirements.txt "$out/requirements.txt"
           Copy-Item -Force README.md        "$out/README.md"
+          Copy-Item -Force "ИНСТРУКЦИЯ.md"  "$out/ИНСТРУКЦИЯ.md"
+          # Полный режим (OCR) работает только из исходников - кладём удобный запускатор.
+          Copy-Item -Force "ЗАПУСК.bat"     "$out/ЗАПУСК.bat"
+          Copy-Item -Force main.py          "$out/main.py"
+          Copy-Item -Recurse -Force app     "$out/app"
+          Remove-Item -Recurse -Force "$out/app/__pycache__" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$out/data" | Out-Null
           Remove-Item -Recurse -Force "$out/scripts/__pycache__" -ErrorAction SilentlyContinue
           Get-ChildItem -Recurse $out | Select-Object FullName, Length
@@ -88,7 +94,10 @@ jobs:
             "$out/scripts/dota_logic.py",
             "$out/scripts/tickets.py",
             "$out/scripts/learning.py",
-            "$out/scripts/input_handler.py"
+            "$out/scripts/input_handler.py",
+            "$out/ЗАПУСК.bat",
+            "$out/ИНСТРУКЦИЯ.md",
+            "$out/main.py"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) { Write-Error "missing artefacts: $missing"; exit 1 }

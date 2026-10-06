@@ -127,6 +127,8 @@ class OtaClient:
         *,
         reload: bool = True,
         on_log: Callable[[str, str], None] = lambda level, msg: None,
+        on_progress: Callable[[int, int, str], None] = lambda done, total, text: None,
+        cancel: Callable[[], bool] = lambda: False,
     ) -> list[SyncResult]:
         """Pull ``names`` (default: the host's module order) and hot-swap them.
 
@@ -137,38 +139,55 @@ class OtaClient:
         fetched: dict[str, str] = {}
         results: list[SyncResult] = []
 
+        # +2 шага: запись файлов и перезагрузка модулей.
+        total = len(targets) + 2
+        done = 0
+        on_progress(done, total, "подключение к GitHub…")
+
         for name in targets:
+            if cancel():
+                on_log("warning", "синхронизация отменена")
+                return results
+            on_progress(done, total, f"скачивание {name}.py…")
             try:
                 source = self.fetch_source(name)
                 host.validate_source(source, name)
                 fetched[name] = source
             except Exception as exc:
-                msg = f"OTA fetch failed for {name}.py: {exc}"
+                msg = f"не удалось скачать {name}.py: {exc}"
                 on_log("error", msg)
                 log.warning(msg)
                 results.append(SyncResult(name, False, error=str(exc)))
+            finally:
+                done += 1
+                on_progress(done, total, f"{name}.py получен")
 
+        on_progress(done, total, "запись файлов…")
         for name, source in fetched.items():
             try:
                 current = host.source_of(name) if host.exists(name) else ""
             except OSError:
                 current = ""
             if current == source:
-                on_log("info", f"{name}.py already up to date")
+                on_log("info", f"{name}.py уже актуален")
                 results.append(SyncResult(name, True, changed=False, size=len(source)))
                 continue
             try:
                 host.write_script(name, source, reload=False)
-                on_log("info", f"updated {name}.py ({len(source)} bytes)")
+                on_log("info", f"обновлён {name}.py ({len(source)} байт)")
                 results.append(SyncResult(name, True, changed=True, size=len(source)))
-            except Exception as exc:  # pragma: no cover - disk failure
-                on_log("error", f"could not write {name}.py: {exc}")
+            except Exception as exc:  # pragma: no cover - сбой диска
+                on_log("error", f"не удалось записать {name}.py: {exc}")
                 results.append(SyncResult(name, False, error=str(exc)))
 
+        done += 1
+        on_progress(done, total, "перезагрузка модулей…")
         if reload and any(r.changed for r in results):
             for res in host.reload_all():
                 if not res.ok:
-                    on_log("error", f"post-sync reload failed for {res.name}: {res.error}")
+                    on_log("error", f"после обновления не загрузился {res.name}: {res.error}")
+        done += 1
+        on_progress(done, total, "готово")
         return results
 
 

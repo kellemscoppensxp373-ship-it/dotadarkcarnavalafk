@@ -1,38 +1,49 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec — compiles ONLY the thin GUI shell.
+PyInstaller spec — компилирует ТОЛЬКО тонкую GUI-оболочку.
 
-Deliberately excluded from the binary:
-  * ``scripts/``  — the business logic ships *beside* the exe as raw .py files so it can
-                    be hot-swapped / OTA-updated without a rebuild. Bundling it would
-                    defeat the entire architecture.
-  * ``assets/``   — hero emoji + portrait sprites, swappable per patch.
+Намеренно НЕ попадает в бинарник:
+  * ``scripts/``  — бизнес-логика лежит РЯДОМ с .exe обычными .py-файлами, чтобы её
+                    можно было менять на лету и обновлять по OTA. Упаковать её внутрь
+                    значило бы похоронить всю архитектуру.
+  * ``assets/``   — спрайты героев, меняются между патчами события.
 
-Build:  pyinstaller DarkCarnival.spec --noconfirm
-Output: dist/DarkCarnival/DarkCarnival.exe  (+ scripts/ and assets/ copied next to it)
+ВАЖНО — почему здесь есть авто-сканирование импортов
+-----------------------------------------------------
+PyInstaller строит список модулей, обходя импорты ТОЧКИ ВХОДА. Внешние скрипты он
+не видит в принципе: они подгружаются из файлов уже в рантайме. Поэтому любой модуль
+стандартной библиотеки, который нужен только скриптам (``difflib``, ``unicodedata``…),
+в сборку не попадал — и .exe падал с ``ModuleNotFoundError: No module named 'difflib'``
+ровно в тот момент, когда пользователь жал «Старт».
+
+Ниже импорты всех файлов ``scripts/*.py`` разбираются через ``ast`` и добавляются в
+``hiddenimports``. Добавите завтра новый скрипт с новым импортом — сборка подхватит
+его сама, без правки этого файла.
+
+Сборка:  pyinstaller DarkCarnival.spec --noconfirm
+Итог:    dist/DarkCarnival/DarkCarnival.exe  (+ рядом копируются scripts/ и assets/)
 """
 
 import sys
 
+sys.path.insert(0, ".")
+from app.packaging import HEAVY, build_hiddenimports, scan_script_imports  # noqa: E402
+
 block_cipher = None
+
+hidden = build_hiddenimports("scripts")
+print(f"[spec] импорты внешних скриптов: {sorted(scan_script_imports('scripts'))}")
+print(f"[spec] всего hiddenimports: {len(hidden)}")
 
 a = Analysis(
     ["main.py"],
     pathex=["."],
     binaries=[],
     datas=[],
-    # The shell only needs Qt + stdlib. Heavy ML wheels are imported lazily *by the
-    # external scripts* at runtime, from the user's own Python environment or from the
-    # optional bundled runtime — keeping the shell small and fast to start.
-    hiddenimports=[
-        "app", "app.loader", "app.ota", "app.paths", "app.settings",
-    ],
+    hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[
-        "torch", "torchvision", "easyocr", "cv2", "numpy", "scipy",
-        "matplotlib", "pandas", "tkinter", "PIL",
-    ],
+    excludes=sorted(HEAVY),
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -51,7 +62,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,          # GUI app — no console window
+    console=False,          # оконное приложение, без консоли
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

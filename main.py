@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app import __version__, paths
+from app.environment import environment_report
 from app.loader import DEFAULT_ORDER, ScriptHost
 from app.ota import OtaClient, OtaConfig
 from app.settings import Settings
@@ -48,6 +49,7 @@ try:
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
+        QProgressBar,
         QPushButton,
         QScrollArea,
         QSpinBox,
@@ -100,6 +102,10 @@ class Bridge(QObject):
     stats_updated = Signal(dict)
     action = Signal(str)
     finished = Signal(dict)
+    progress = Signal(int, int, str)     # сделано, всего, подпись
+    busy = Signal(bool, str)             # идёт длительная операция / её название
+    ota_log = Signal(str, str)           # подробности синхронизации для вкладки OTA
+    ota_finished = Signal(object)
 
 
 class AgentWorker(threading.Thread):
@@ -169,6 +175,47 @@ class AgentWorker(threading.Thread):
             self.bridge.finished.emit(summary)
 
 
+class OtaWorker(threading.Thread):
+    """Качает скрипты с GitHub вне потока интерфейса.
+
+    Раньше синхронизация шла прямо в обработчике кнопки: любой сетевой таймаут
+    намертво подвешивал окно (Windows рисовал «Не отвечает»). Теперь работа идёт
+    в фоне, а в интерфейс летят только сигналы прогресса.
+    """
+
+    daemon = True
+
+    def __init__(self, ota: OtaClient, host: ScriptHost, bridge: Bridge) -> None:
+        super().__init__(name="dc-ota")
+        self.ota = ota
+        self.host = host
+        self.bridge = bridge
+        self.cancel_event = threading.Event()
+
+    def _log(self, level: str, message: str) -> None:
+        """Продублировать сообщение в общий журнал и во вкладку обновления."""
+        self.bridge.logged.emit(level, message)
+        self.bridge.ota_log.emit(level, message)
+
+    def run(self) -> None:
+        results: list = []
+        try:
+            self.bridge.busy.emit(True, "Синхронизация с GitHub")
+            results = self.ota.sync(
+                self.host,
+                on_log=self._log,
+                on_progress=lambda done, total, text:
+                    self.bridge.progress.emit(done, total, text),
+                cancel=self.cancel_event.is_set,
+            )
+        except Exception as exc:
+            self._log("error", f"синхронизация не удалась: {exc}")
+            self.bridge.logged.emit("debug", traceback.format_exc())
+        finally:
+            self.bridge.busy.emit(False, "")
+            self.bridge.ota_finished.emit(results)
+
+
 # ======================================================================================
 # Главное окно
 # ======================================================================================
@@ -221,6 +268,7 @@ class MainWindow(QMainWindow):
         self.settings = Settings.load(paths.settings_file())
         self.bridge = Bridge()
         self.worker: AgentWorker | None = None
+        self.ota_worker: OtaWorker | None = None
         self.book = None                     # таблица билетов (из внешнего скрипта)
         self.arcana_rows: dict[str, dict] = {}
 
@@ -273,6 +321,17 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self.status.showMessage(f"скрипты: {paths.scripts_dir()}")
+
+        # Индикатор длительных операций: виден всегда, когда что-то происходит.
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("hint")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedWidth(280)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%v / %m")
+        self.progress_bar.hide()
+        self.status.addPermanentWidget(self.progress_label)
+        self.status.addPermanentWidget(self.progress_bar)
 
         panic = QShortcut(QKeySequence("F12"), self)
         panic.activated.connect(self.on_stop)
@@ -490,6 +549,11 @@ class MainWindow(QMainWindow):
         self.bridge.stats_updated.connect(self.on_stats)
         self.bridge.action.connect(lambda a: self.action_label.setText(f"последнее действие: {a}"))
         self.bridge.finished.connect(self.on_finished)
+        self.bridge.progress.connect(self.on_progress)
+        self.bridge.busy.connect(self.on_busy)
+        self.bridge.ota_finished.connect(self.on_ota_finished)
+        self.bridge.ota_log.connect(
+            lambda level, msg: self.ota_output.appendPlainText(f"  {msg}"))
 
         self.btn_start.clicked.connect(self.on_start)
         self.btn_pause.clicked.connect(self.on_pause)
@@ -560,17 +624,71 @@ class MainWindow(QMainWindow):
         self.log_view.appendHtml(f'<span style="color:{color}">{safe}</span>')
         self.log_view.moveCursor(QTextCursor.End)
 
+    def on_progress(self, done: int, total: int, text: str) -> None:
+        """Отрисовать шаг длительной операции."""
+        self.progress_bar.show()
+        if total <= 0:                       # неизвестная длительность — бегущая полоса
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(done)
+        if text:
+            self.progress_label.setText(text)
+            self.ota_output.appendPlainText(f"  [{done}/{total}] {text}")
+
+    def on_busy(self, busy: bool, title: str) -> None:
+        """Заблокировать кнопки на время длительной операции."""
+        for button in (self.btn_sync, self.btn_list_remote, self.btn_reload_all,
+                       self.btn_apply, self.btn_start):
+            button.setEnabled(not busy)
+        if busy:
+            self.progress_bar.show()
+            self.progress_label.setText(title)
+            self.status.showMessage(f"{title}…")
+        else:
+            self.progress_bar.hide()
+            self.progress_label.setText("")
+            self.refresh_script_status()
+
+    def on_ota_finished(self, results) -> None:
+        """Подвести итог синхронизации (вызывается в потоке интерфейса)."""
+        self.ota_worker = None
+        results = results or []
+        changed = sum(1 for r in results if r.changed)
+        failed = [r.name for r in results if not r.ok]
+        unchanged = len(results) - changed - len(failed)
+        summary = (f"← готово: обновлено {changed}, без изменений {unchanged}, "
+                   f"с ошибкой {len(failed)}" + (f" {failed}" if failed else ""))
+        self.ota_output.appendPlainText(summary)
+        self.append_log("success" if not failed else "warning", summary)
+        self.refresh_script_status()
+        self.refresh_tickets_tab()
+
     def _initial_load(self) -> None:
         self.append_log("info", f"папка скриптов: {paths.scripts_dir()}")
         missing = self.host.missing()
         if missing:
             self.append_log("warning", f"отсутствуют скрипты: {', '.join(missing)}")
-        for r in self.host.load_all():
+        for level, text in environment_report():
+            self.append_log(level, text)
+
+        order = list(self.host.order)
+        for i, name in enumerate(order, start=1):
+            self.on_progress(i, len(order), f"загрузка {name}.py")
+            r = self.host.load(name)
             self.append_log(
                 "success" if r.ok else "error",
                 f"{'✓' if r.ok else '✗'} {r.name}.py"
                 + (f"  ({r.duration * 1000:.0f} мс, {r.source_hash})" if r.ok else f"  {r.error}"),
             )
+            if not r.ok and "No module named" in r.error:
+                self.append_log(
+                    "error",
+                    "↑ не хватает модуля Python. Если вы запустили .exe — пересоберите "
+                    "его с актуальным DarkCarnival.spec или запустите из исходников "
+                    "(см. ИНСТРУКЦИЯ.md, раздел 2).")
+        self.progress_bar.hide()
+        self.progress_label.setText("")
         self.refresh_script_status()
         self.refresh_tickets_tab()
         if self.settings.auto_sync_on_start:
@@ -798,25 +916,18 @@ class MainWindow(QMainWindow):
             f"/{self.ota.config.path}:\n  " + "\n  ".join(names))
 
     def on_sync(self) -> None:
+        """Запустить синхронизацию в фоне — окно остаётся отзывчивым."""
         if self.worker and self.worker.is_alive():
             self.append_log("warning", "сначала остановите агента")
+            return
+        if self.ota_worker is not None and self.ota_worker.is_alive():
+            self.append_log("warning", "синхронизация уже идёт")
             return
         self.on_save_settings()
         self.ota_output.appendPlainText(
             f"→ загрузка из {self.ota.config.slug}@{self.ota.config.branch}…")
-        results = self.ota.sync(
-            self.host,
-            on_log=lambda level, msg: (self.append_log(level, msg),
-                                       self.ota_output.appendPlainText(f"  {msg}")),
-        )
-        changed = sum(1 for r in results if r.changed)
-        failed = [r.name for r in results if not r.ok]
-        self.ota_output.appendPlainText(
-            f"← готово: обновлено {changed}, без изменений "
-            f"{len(results) - changed - len(failed)}, с ошибкой {len(failed)} "
-            f"{failed if failed else ''}")
-        self.refresh_script_status()
-        self.refresh_tickets_tab()
+        self.ota_worker = OtaWorker(self.ota, self.host, self.bridge)
+        self.ota_worker.start()
 
     # -- завершение
 
@@ -824,6 +935,9 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.is_alive():
             self.worker.stop_event.set()
             self.worker.join(timeout=5.0)
+        if self.ota_worker and self.ota_worker.is_alive():
+            self.ota_worker.cancel_event.set()
+            self.ota_worker.join(timeout=5.0)
         try:
             self._collect_settings().save(paths.settings_file())
         except Exception:  # pragma: no cover

@@ -197,6 +197,19 @@ def test_settings_round_trip_through_the_ui(gui):
     assert gui.ota.config.raw_url("vision.py").endswith("/someone/otherrepo/dev/scripts/vision.py")
 
 
+def _sync_and_wait(gui, timeout: float = 10.0) -> None:
+    """Нажать «Синхронизировать» и дождаться фонового потока.
+
+    Синхронизация специально вынесена из потока интерфейса (иначе окно зависало),
+    поэтому тест обязан дождаться воркера и вручную прокрутить сигнал итога.
+    """
+    gui.on_sync()
+    worker = gui.ota_worker
+    assert worker is not None
+    worker.join(timeout=timeout)
+    assert not worker.is_alive(), "фоновая синхронизация не завершилась"
+
+
 def test_ota_sync_button_pulls_and_hot_reloads(gui, monkeypatch):
     from app.ota import OtaClient
 
@@ -209,9 +222,12 @@ def test_ota_sync_button_pulls_and_hot_reloads(gui, monkeypatch):
 
     gui.ota = OtaClient(gui._ota_config(), opener=fake_opener)
     monkeypatch.setattr(gui, "on_save_settings", lambda: None)
-    gui.on_sync()
+    _sync_and_wait(gui)
     assert gui.host.get("dota_logic").OTA_MARKER == "synced"
-    assert "updated" in gui.ota_output.toPlainText()
+    assert "обновлён" in gui.ota_output.toPlainText()
+    # Прогресс-бар дошёл до конца и спрятался по завершении.
+    assert gui.progress_bar.value() == gui.progress_bar.maximum()
+    assert not gui.progress_bar.isVisible()
 
 
 def test_ota_failure_is_reported_not_raised(gui, monkeypatch):
@@ -222,9 +238,11 @@ def test_ota_failure_is_reported_not_raised(gui, monkeypatch):
 
     gui.ota = OtaClient(gui._ota_config(), opener=boom)
     monkeypatch.setattr(gui, "on_save_settings", lambda: None)
-    gui.on_sync()
-    assert "failed" in gui.ota_output.toPlainText().lower()
-    assert gui.host.healthy            # local scripts still fine
+    _sync_and_wait(gui)
+    assert "не удалось скачать" in gui.ota_output.toPlainText()
+    assert gui.host.healthy            # локальные скрипты по-прежнему целы
+    # Интерфейс разблокирован даже после провала сети.
+    assert gui.btn_sync.isEnabled()
 
 
 def test_list_remote_scripts_renders(gui, monkeypatch):
