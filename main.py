@@ -1,18 +1,18 @@
 """
-main.py — Thin loader for the Dark Carnival Cognitive RPA agent.
+main.py — Тонкий загрузчик агента «Тёмный карнавал».
 
-This file is the ONLY thing PyInstaller compiles into logic-bearing code, and it contains
-exactly two concerns:
+Это единственный файл, который компилируется в .exe, и в нём ровно две вещи:
 
-  1. the PySide6 GUI (control panel, dev console, log view), and
-  2. the ``importlib`` loader that imports/reloads the external business-logic scripts.
+  1. интерфейс на PySide6 (панель управления, билеты, консоль разработчика, OTA);
+  2. загрузчик внешних скриптов на ``importlib``.
 
-**No automation logic lives here.** Vision, input synthesis, the Dota state machine and
-the learning store are raw ``.py`` files in ``scripts/`` next to the executable, loaded at
-runtime and hot-swappable without restarting the app.
+**Никакой логики автоматизации здесь нет.** Зрение, ввод, машина состояний Dota,
+таблица билетов и обучение — это обычные .py-файлы в папке ``scripts/`` рядом с
+исполняемым файлом. Они подгружаются в рантайме и заменяются «на лету», без
+перезапуска программы.
 
-Run in dev:      python main.py
-Build the exe:   pyinstaller DarkCarnival.spec
+Запуск из исходников:  python main.py
+Сборка .exe:           pyinstaller DarkCarnival.spec
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import threading
 import traceback
 from pathlib import Path
 
-# The frozen shell packages (loader / OTA / paths / settings) live beside this file.
+# Служебные пакеты оболочки (загрузчик / OTA / пути / настройки) лежат рядом.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app import __version__, paths
@@ -45,12 +45,11 @@ try:
         QHBoxLayout,
         QLabel,
         QLineEdit,
-        QListWidget,
-        QListWidgetItem,
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
         QPushButton,
+        QScrollArea,
         QSpinBox,
         QSplitter,
         QStatusBar,
@@ -58,13 +57,13 @@ try:
         QVBoxLayout,
         QWidget,
     )
-except ImportError:  # pragma: no cover - GUI is optional on CI / headless boxes
-    print("PySide6 is required to run the GUI:  pip install PySide6", file=sys.stderr)
+except ImportError:  # pragma: no cover - на CI графики нет
+    print("Для работы интерфейса нужен PySide6:  pip install PySide6", file=sys.stderr)
     raise
 
 
 # ======================================================================================
-# Logging
+# Журналирование
 # ======================================================================================
 
 def setup_logging() -> None:
@@ -89,13 +88,13 @@ log = logging.getLogger("dc.gui")
 
 
 # ======================================================================================
-# Qt bridge — the worker thread talks to the GUI only through signals
+# Мост между рабочим потоком и интерфейсом
 # ======================================================================================
 
 class Bridge(QObject):
-    """Thread-safe signal relay between the executor worker and the Qt main thread."""
+    """Потокобезопасная передача событий агента в поток интерфейса."""
 
-    logged = Signal(str, str)      # level, message
+    logged = Signal(str, str)      # уровень, сообщение
     state_changed = Signal(str)
     cycle_done = Signal(object)
     stats_updated = Signal(dict)
@@ -104,7 +103,7 @@ class Bridge(QObject):
 
 
 class AgentWorker(threading.Thread):
-    """Runs ``executor.Executor.run()`` off the GUI thread."""
+    """Выполняет ``executor.Executor.run()`` вне потока интерфейса."""
 
     daemon = True
 
@@ -118,7 +117,7 @@ class AgentWorker(threading.Thread):
         self.executor = None
 
     def build(self):
-        """Construct the executor from the *currently loaded* script modules."""
+        """Собрать агента из ТЕКУЩИХ загруженных версий скриптов."""
         executor_mod = self.host.get("executor")
         logic = self.host.get("dota_logic")
         vision_mod = self.host.get("vision")
@@ -127,8 +126,10 @@ class AgentWorker(threading.Thread):
 
         cfg = logic.LoopConfig(
             max_cycles=self.settings.max_cycles,
-            hero_pool=tuple(self.settings.hero_pool),
             ticket_target=dict(self.settings.ticket_target),
+            min_ticket_yield=self.settings.min_ticket_yield,
+            avoid_heroes=tuple(self.settings.avoid_heroes),
+            tickets_file=str(paths.tickets_file()),
             leave_early=self.settings.leave_early,
             poll_interval=self.settings.poll_interval,
             simulate=self.settings.simulate,
@@ -162,14 +163,14 @@ class AgentWorker(threading.Thread):
             self.executor = self.build()
             summary = self.executor.run() or {}
         except Exception as exc:
-            self.bridge.logged.emit("error", f"agent crashed: {exc!r}")
+            self.bridge.logged.emit("error", f"агент аварийно остановлен: {exc!r}")
             self.bridge.logged.emit("debug", traceback.format_exc())
         finally:
             self.bridge.finished.emit(summary)
 
 
 # ======================================================================================
-# Main window
+# Главное окно
 # ======================================================================================
 
 DARK_QSS = """
@@ -183,13 +184,16 @@ QPushButton#primary  { background:#2f6f4f; border-color:#3d8c64; font-weight:bol
 QPushButton#primary:hover { background:#38865f; }
 QPushButton#danger   { background:#7a3030; border-color:#9c4040; font-weight:bold; }
 QPushButton#danger:hover  { background:#8f3838; }
-QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
+QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background:#0f1115; border:1px solid #2a2e37; border-radius:4px; padding:4px;
     selection-background-color:#2f6f4f;
 }
 QTabBar::tab { background:#1b1e25; padding:8px 16px; border:1px solid #2a2e37; }
 QTabBar::tab:selected { background:#232832; color:#ffffff; }
 QLabel#state { font-size:17px; font-weight:bold; color:#6fc49a; }
+QLabel#arcana { font-weight:bold; color:#c9a227; }
+QLabel#hint { color:#8f98a8; }
+QScrollArea { border:none; }
 """
 
 LEVEL_COLORS = {
@@ -197,16 +201,28 @@ LEVEL_COLORS = {
     "error": "#e06c75", "success": "#6fc49a",
 }
 
+#: Русские названия состояний для крупной надписи на панели.
+RU_STATES = {
+    "unknown": "неизвестный экран", "dashboard": "главное меню",
+    "queueing": "поиск игры", "match_found": "игра найдена",
+    "hero_pick": "выбор героя", "in_game": "идёт матч",
+    "post_game": "итоги матча", "safe_to_leave": "можно выходить",
+    "reward_screen": "экран наград", "disconnected": "нет соединения",
+    "error": "ошибка", "idle": "ожидание",
+}
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"Dark Carnival — Cognitive RPA v{__version__}")
-        self.resize(1180, 780)
+        self.setWindowTitle(f"Тёмный карнавал — когнитивный агент v{__version__}")
+        self.resize(1180, 820)
 
         self.settings = Settings.load(paths.settings_file())
         self.bridge = Bridge()
         self.worker: AgentWorker | None = None
+        self.book = None                     # таблица билетов (из внешнего скрипта)
+        self.arcana_rows: dict[str, dict] = {}
 
         self.host = ScriptHost(
             directory=paths.scripts_dir(),
@@ -222,69 +238,70 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(50, self._initial_load)
 
-    # ---------------------------------------------------------------- UI construction
+    # ------------------------------------------------------------- построение окна
 
     def _build_ui(self) -> None:
-        tabs = QTabWidget()
-        tabs.addTab(self._build_control_tab(), "Control")
-        tabs.addTab(self._build_console_tab(), "Dev Console")
-        tabs.addTab(self._build_ota_tab(), "GitHub OTA")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_control_tab(), "Управление")
+        self.tabs.addTab(self._build_tickets_tab(), "Билеты")
+        self.tabs.addTab(self._build_console_tab(), "Консоль разработчика")
+        self.tabs.addTab(self._build_ota_tab(), "Обновление с GitHub")
 
         self.log_view = QPlainTextEdit(readOnly=True)
         self.log_view.setFont(QFont("Consolas", 10))
         self.log_view.setMaximumBlockCount(5000)
 
-        log_box = QGroupBox("Live log")
+        log_box = QGroupBox("Журнал работы")
         lv = QVBoxLayout(log_box)
         lv.addWidget(self.log_view)
         btns = QHBoxLayout()
-        clear = QPushButton("Clear")
+        clear = QPushButton("Очистить")
         clear.clicked.connect(self.log_view.clear)
-        open_log = QPushButton("Open log file")
-        open_log.clicked.connect(lambda: self.append_log("info", f"log file: {paths.log_file()}"))
+        where = QPushButton("Где лежит файл журнала?")
+        where.clicked.connect(lambda: self.append_log("info", f"журнал: {paths.log_file()}"))
         btns.addWidget(clear)
-        btns.addWidget(open_log)
+        btns.addWidget(where)
         btns.addStretch(1)
         lv.addLayout(btns)
 
         splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(tabs)
+        splitter.addWidget(self.tabs)
         splitter.addWidget(log_box)
-        splitter.setSizes([520, 260])
+        splitter.setSizes([560, 260])
         self.setCentralWidget(splitter)
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage(f"scripts: {paths.scripts_dir()}")
+        self.status.showMessage(f"скрипты: {paths.scripts_dir()}")
 
         panic = QShortcut(QKeySequence("F12"), self)
         panic.activated.connect(self.on_stop)
+
+    # -- вкладка «Управление»
 
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        # --- status row
-        status_box = QGroupBox("Agent")
+        status_box = QGroupBox("Агент")
         grid = QGridLayout(status_box)
-        self.state_label = QLabel("idle")
+        self.state_label = QLabel("ожидание")
         self.state_label.setObjectName("state")
-        self.cycle_label = QLabel("cycles: 0")
-        self.tickets_label = QLabel("tickets: —")
-        self.action_label = QLabel("last action: —")
-        grid.addWidget(QLabel("State:"), 0, 0)
+        self.cycle_label = QLabel("циклов: 0")
+        self.tickets_label = QLabel("билеты: —")
+        self.action_label = QLabel("последнее действие: —")
+        grid.addWidget(QLabel("Состояние:"), 0, 0)
         grid.addWidget(self.state_label, 0, 1)
         grid.addWidget(self.cycle_label, 0, 2)
         grid.addWidget(self.action_label, 1, 0, 1, 2)
         grid.addWidget(self.tickets_label, 1, 2)
         layout.addWidget(status_box)
 
-        # --- controls
         ctl = QHBoxLayout()
-        self.btn_start = QPushButton("▶  Start")
+        self.btn_start = QPushButton("▶  Старт")
         self.btn_start.setObjectName("primary")
-        self.btn_pause = QPushButton("⏸  Pause")
-        self.btn_stop = QPushButton("■  Stop  (F12)")
+        self.btn_pause = QPushButton("⏸  Пауза")
+        self.btn_stop = QPushButton("■  Стоп  (F12)")
         self.btn_stop.setObjectName("danger")
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
@@ -293,63 +310,118 @@ class MainWindow(QMainWindow):
         ctl.addStretch(1)
         layout.addLayout(ctl)
 
-        # --- loop settings
-        cfg_box = QGroupBox("Loop configuration")
+        cfg_box = QGroupBox("Параметры цикла")
         form = QFormLayout(cfg_box)
+        self.in_yield = QSpinBox()
+        self.in_yield.setRange(1, 3)
+        self.in_yield.setToolTip(
+            "3 — играть только на героях, дающих 3 билета за игру (рекомендуется).\n"
+            "Снижать имеет смысл, только если «тройной» герой не определён."
+        )
         self.in_cycles = QSpinBox()
         self.in_cycles.setRange(0, 9999)
-        self.in_cycles.setSpecialValueText("unlimited")
+        self.in_cycles.setSpecialValueText("без ограничения")
         self.in_poll = QDoubleSpinBox()
         self.in_poll.setRange(0.5, 30.0)
         self.in_poll.setSingleStep(0.5)
-        self.in_simulate = QCheckBox("Simulation mode (never touch the real mouse/keyboard)")
-        self.in_leave = QCheckBox("Leave as soon as «Игру можно безопасно покинуть» appears")
-        self.in_gpu = QCheckBox("Use GPU for EasyOCR")
         self.in_threshold = QDoubleSpinBox()
         self.in_threshold.setRange(0.5, 1.0)
         self.in_threshold.setSingleStep(0.02)
-        form.addRow("Max cycles", self.in_cycles)
-        form.addRow("Poll interval (s)", self.in_poll)
-        form.addRow("OCR match threshold", self.in_threshold)
+        self.in_simulate = QCheckBox("Режим симуляции (не трогать реальные мышь и клавиатуру)")
+        self.in_leave = QCheckBox("Выходить сразу по надписи «Игру можно безопасно покинуть»")
+        self.in_gpu = QCheckBox("Использовать видеокарту для EasyOCR")
+        form.addRow("Минимум билетов за игру", self.in_yield)
+        form.addRow("Сколько циклов сыграть", self.in_cycles)
+        form.addRow("Интервал опроса экрана, с", self.in_poll)
+        form.addRow("Порог распознавания текста", self.in_threshold)
         form.addRow("", self.in_simulate)
         form.addRow("", self.in_leave)
         form.addRow("", self.in_gpu)
         layout.addWidget(cfg_box)
 
-        # --- hero pool
-        hero_box = QGroupBox("Hero pool (dual-asset DB — emoji for rewards, portrait for picks)")
-        hv = QVBoxLayout(hero_box)
-        self.hero_list = QListWidget()
-        self.hero_list.setSelectionMode(QListWidget.NoSelection)
-        hv.addWidget(self.hero_list)
-        hrow = QHBoxLayout()
-        self.btn_refresh_heroes = QPushButton("Reload hero DB")
-        hrow.addWidget(self.btn_refresh_heroes)
-        hrow.addStretch(1)
-        hv.addLayout(hrow)
-        layout.addWidget(hero_box, 1)
-
+        hint = QLabel(
+            "<b>Порядок действий:</b> 1) заполните вкладку «Билеты» — какой герой даёт ×3 "
+            "для нужного аркана;  2) запустите Dota 2 в <b>оконном без рамки</b> режиме;  "
+            "3) нажмите «Старт» с включённой симуляцией и убедитесь по журналу, что агент "
+            "правильно читает русские надписи;  4) снимите галочку симуляции и запускайте "
+            "по-настоящему. <b>F12 — аварийная остановка.</b>"
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
         return page
+
+    # -- вкладка «Билеты»
+
+    def _build_tickets_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        intro = QLabel(
+            "Каждый аркан события — это панель из трёх секций: <b>×1</b>, <b>×2</b> и "
+            "<b>×3</b> билета за игру. Нас интересует только нижняя секция <b>×3</b>: "
+            "одна игра на таком герое приносит втрое больше при тех же затратах времени.<br>"
+            "Откройте в игре панель аркана, посмотрите, кто стоит в секции ×3, и впишите "
+            "его имя так, как оно пишется в <b>поиске героев</b> (по-русски). "
+            "Столбец «нужно» — сколько билетов этого аркана вы хотите нафармить (0 — не фармить)."
+        )
+        intro.setObjectName("hint")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.addWidget(QLabel("<b>Аркан</b>"), 0, 0)
+        grid.addWidget(QLabel("<b>Герой с отдачей ×3</b>"), 0, 1)
+        grid.addWidget(QLabel("<b>Нужно билетов</b>"), 0, 2)
+        grid.addWidget(QLabel("<b>Состояние</b>"), 0, 3)
+        self.tickets_grid = grid
+        self.tickets_container = container
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        self.btn_tickets_save = QPushButton("💾  Сохранить таблицу билетов")
+        self.btn_tickets_save.setObjectName("primary")
+        self.btn_tickets_reload = QPushButton("Перечитать из файла")
+        self.btn_tickets_open = QPushButton("Где лежит файл?")
+        row.addWidget(self.btn_tickets_save)
+        row.addWidget(self.btn_tickets_reload)
+        row.addWidget(self.btn_tickets_open)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.tickets_status = QLabel("—")
+        self.tickets_status.setObjectName("hint")
+        layout.addWidget(self.tickets_status)
+        return page
+
+    # -- вкладка «Консоль разработчика»
 
     def _build_console_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
         layout.addWidget(QLabel(
-            "Business logic runs from external <b>.py</b> files beside the executable. "
-            "Edit or paste code here and hit <b>Apply &amp; Reload</b> — "
-            "<code>importlib.reload()</code> swaps it into the running process instantly."
+            "Логика работает из внешних <b>.py</b>-файлов рядом с программой. "
+            "Отредактируйте или вставьте код и нажмите <b>Применить и перезагрузить</b> — "
+            "<code>importlib.reload()</code> подменит его в уже запущенной программе, "
+            "перезапуск не нужен."
         ))
 
         row = QHBoxLayout()
         self.script_picker = QComboBox()
         self.script_picker.addItems(list(DEFAULT_ORDER))
-        self.btn_open_script = QPushButton("Load file into editor")
-        self.btn_apply = QPushButton("Apply && Reload")
+        self.btn_open_script = QPushButton("Открыть файл в редакторе")
+        self.btn_apply = QPushButton("Применить и перезагрузить")
         self.btn_apply.setObjectName("primary")
-        self.btn_reload_all = QPushButton("Reload ALL scripts")
-        self.btn_rollback = QPushButton("Rollback")
-        row.addWidget(QLabel("Script:"))
+        self.btn_reload_all = QPushButton("Перезагрузить ВСЁ")
+        self.btn_rollback = QPushButton("Откатить")
+        row.addWidget(QLabel("Скрипт:"))
         row.addWidget(self.script_picker)
         row.addWidget(self.btn_open_script)
         row.addWidget(self.btn_apply)
@@ -360,20 +432,22 @@ class MainWindow(QMainWindow):
 
         self.editor = QPlainTextEdit()
         self.editor.setFont(QFont("Consolas", 10))
-        self.editor.setPlaceholderText("# Paste replacement code for the selected script…")
+        self.editor.setPlaceholderText("# Вставьте сюда код выбранного скрипта…")
         layout.addWidget(self.editor, 1)
 
         self.script_status = QPlainTextEdit(readOnly=True)
         self.script_status.setFont(QFont("Consolas", 9))
-        self.script_status.setMaximumHeight(130)
+        self.script_status.setMaximumHeight(140)
         layout.addWidget(self.script_status)
         return page
+
+    # -- вкладка «Обновление с GitHub»
 
     def _build_ota_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        box = QGroupBox("GitHub source")
+        box = QGroupBox("Источник на GitHub")
         form = QFormLayout(box)
         self.in_owner = QLineEdit()
         self.in_repo = QLineEdit()
@@ -381,21 +455,21 @@ class MainWindow(QMainWindow):
         self.in_path = QLineEdit()
         self.in_token = QLineEdit()
         self.in_token.setEchoMode(QLineEdit.Password)
-        self.in_token.setPlaceholderText("optional — only for private repos / rate limits")
-        self.in_autosync = QCheckBox("Sync automatically on startup")
-        form.addRow("Owner", self.in_owner)
-        form.addRow("Repository", self.in_repo)
-        form.addRow("Branch", self.in_branch)
-        form.addRow("Scripts path", self.in_path)
-        form.addRow("Token", self.in_token)
+        self.in_token.setPlaceholderText("не обязателен — только для приватных репозиториев")
+        self.in_autosync = QCheckBox("Синхронизировать при запуске программы")
+        form.addRow("Владелец", self.in_owner)
+        form.addRow("Репозиторий", self.in_repo)
+        form.addRow("Ветка", self.in_branch)
+        form.addRow("Папка со скриптами", self.in_path)
+        form.addRow("Токен", self.in_token)
         form.addRow("", self.in_autosync)
         layout.addWidget(box)
 
         row = QHBoxLayout()
-        self.btn_sync = QPushButton("⟳  Sync from GitHub && Hot-Reload")
+        self.btn_sync = QPushButton("⟳  Скачать с GitHub и применить")
         self.btn_sync.setObjectName("primary")
-        self.btn_list_remote = QPushButton("List remote scripts")
-        self.btn_save_settings = QPushButton("Save settings")
+        self.btn_list_remote = QPushButton("Показать список скриптов")
+        self.btn_save_settings = QPushButton("Сохранить настройки")
         row.addWidget(self.btn_sync)
         row.addWidget(self.btn_list_remote)
         row.addWidget(self.btn_save_settings)
@@ -407,20 +481,24 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.ota_output, 1)
         return page
 
-    # ------------------------------------------------------------------------ wiring
+    # ----------------------------------------------------------------------- связи
 
     def _wire_signals(self) -> None:
         self.bridge.logged.connect(self.append_log)
         self.bridge.state_changed.connect(self.on_state_changed)
         self.bridge.cycle_done.connect(self.on_cycle_done)
         self.bridge.stats_updated.connect(self.on_stats)
-        self.bridge.action.connect(lambda a: self.action_label.setText(f"last action: {a}"))
+        self.bridge.action.connect(lambda a: self.action_label.setText(f"последнее действие: {a}"))
         self.bridge.finished.connect(self.on_finished)
 
         self.btn_start.clicked.connect(self.on_start)
         self.btn_pause.clicked.connect(self.on_pause)
         self.btn_stop.clicked.connect(self.on_stop)
-        self.btn_refresh_heroes.clicked.connect(self.refresh_hero_list)
+
+        self.btn_tickets_save.clicked.connect(self.on_tickets_save)
+        self.btn_tickets_reload.clicked.connect(self.refresh_tickets_tab)
+        self.btn_tickets_open.clicked.connect(
+            lambda: self.append_log("info", f"таблица билетов: {paths.tickets_file()}"))
 
         self.btn_open_script.clicked.connect(self.on_open_script)
         self.btn_apply.clicked.connect(self.on_apply_script)
@@ -438,6 +516,7 @@ class MainWindow(QMainWindow):
 
     def _load_settings_into_ui(self) -> None:
         s = self.settings
+        self.in_yield.setValue(s.min_ticket_yield)
         self.in_cycles.setValue(s.max_cycles)
         self.in_poll.setValue(s.poll_interval)
         self.in_threshold.setValue(s.match_threshold)
@@ -453,6 +532,7 @@ class MainWindow(QMainWindow):
 
     def _collect_settings(self) -> Settings:
         s = self.settings
+        s.min_ticket_yield = self.in_yield.value()
         s.max_cycles = self.in_cycles.value()
         s.poll_interval = self.in_poll.value()
         s.match_threshold = self.in_threshold.value()
@@ -465,14 +545,14 @@ class MainWindow(QMainWindow):
         s.ota_path = self.in_path.text().strip()
         s.ota_token = self.in_token.text().strip()
         s.auto_sync_on_start = self.in_autosync.isChecked()
-        s.hero_pool = [
-            self.hero_list.item(i).data(Qt.UserRole)
-            for i in range(self.hero_list.count())
-            if self.hero_list.item(i).checkState() == Qt.Checked
-        ] or s.hero_pool
+        s.ticket_target = {
+            key: row["target"].value()
+            for key, row in self.arcana_rows.items()
+            if row["target"].value() > 0
+        }
         return s
 
-    # --------------------------------------------------------------------- behaviour
+    # ------------------------------------------------------------------- поведение
 
     def append_log(self, level: str, message: str) -> None:
         color = LEVEL_COLORS.get(level, "#d7dae0")
@@ -481,18 +561,18 @@ class MainWindow(QMainWindow):
         self.log_view.moveCursor(QTextCursor.End)
 
     def _initial_load(self) -> None:
-        self.append_log("info", f"scripts directory: {paths.scripts_dir()}")
+        self.append_log("info", f"папка скриптов: {paths.scripts_dir()}")
         missing = self.host.missing()
         if missing:
-            self.append_log("warning", f"missing external scripts: {', '.join(missing)}")
-        results = self.host.load_all()
-        for r in results:
-            self.append_log("success" if r.ok else "error",
-                            f"{'✓' if r.ok else '✗'} {r.name}.py"
-                            + (f"  ({r.duration * 1000:.0f} ms, {r.source_hash})" if r.ok
-                               else f"  {r.error}"))
+            self.append_log("warning", f"отсутствуют скрипты: {', '.join(missing)}")
+        for r in self.host.load_all():
+            self.append_log(
+                "success" if r.ok else "error",
+                f"{'✓' if r.ok else '✗'} {r.name}.py"
+                + (f"  ({r.duration * 1000:.0f} мс, {r.source_hash})" if r.ok else f"  {r.error}"),
+            )
         self.refresh_script_status()
-        self.refresh_hero_list()
+        self.refresh_tickets_tab()
         if self.settings.auto_sync_on_start:
             self.on_sync()
 
@@ -500,138 +580,202 @@ class MainWindow(QMainWindow):
         lines = []
         for name, info in self.host.status().items():
             mark = "✓" if info["loaded"] else ("•" if info["exists"] else "✗")
-            lines.append(f"{mark} {name:<14} hash={info['hash'] or '-':<12} {info['path']}")
+            lines.append(f"{mark} {name:<14} хеш={info['hash'] or '-':<12} {info['path']}")
         self.script_status.setPlainText("\n".join(lines))
         self.status.showMessage(
-            "all scripts loaded" if self.host.healthy else "⚠ some scripts failed to load"
+            "все скрипты загружены" if self.host.healthy
+            else "⚠ часть скриптов не загрузилась — см. журнал"
         )
 
-    def refresh_hero_list(self) -> None:
-        self.hero_list.clear()
+    # -- билеты
+
+    def refresh_tickets_tab(self) -> None:
+        """Перестроить таблицу арканов из загруженного скрипта и файла билетов."""
         try:
             logic = self.host.get("dota_logic")
         except Exception as exc:
-            self.append_log("error", f"hero DB unavailable: {exc}")
+            self.append_log("error", f"таблица билетов недоступна: {exc}")
             return
-        for hero in logic.all_heroes():
-            item = QListWidgetItem(
-                f"{hero.name_ru:<22} [{hero.key}]   tickets: {', '.join(hero.grants_tickets)}"
-                f"   emoji={hero.emoji_img}  portrait={hero.portrait_img}"
-            )
-            item.setData(Qt.UserRole, hero.key)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if hero.key in self.settings.hero_pool else Qt.Unchecked)
-            self.hero_list.addItem(item)
-        self.append_log("info", f"hero DB: {self.hero_list.count()} heroes loaded")
 
-    # -- agent control
+        self.book = logic.TicketBook.load(str(paths.tickets_file()))
+        self.book.min_yield = self.settings.min_ticket_yield
+
+        # Очистить прошлые строки (кроме заголовка).
+        for row in self.arcana_rows.values():
+            for widget in (row["name"], row["hero"], row["target"], row["state"]):
+                widget.setParent(None)
+        self.arcana_rows.clear()
+
+        for i, key in enumerate(logic.arcana_order(), start=1):
+            name = QLabel(logic.arcana_name_ru(key))
+            name.setObjectName("arcana")
+            hero = QLineEdit()
+            hero.setPlaceholderText("имя героя из секции ×3, например: Фантом Ассасин")
+            existing = self.book.heroes_for(key, 3)
+            hero.setText(", ".join(existing))
+            target = QSpinBox()
+            target.setRange(0, 9999)
+            target.setSpecialValueText("не фармить")
+            target.setValue(int(self.settings.ticket_target.get(key, 0)))
+            state = QLabel("✓ готов" if existing else "— не заполнен")
+
+            self.tickets_grid.addWidget(name, i, 0)
+            self.tickets_grid.addWidget(hero, i, 1)
+            self.tickets_grid.addWidget(target, i, 2)
+            self.tickets_grid.addWidget(state, i, 3)
+            self.arcana_rows[key] = {"name": name, "hero": hero,
+                                     "target": target, "state": state}
+
+        self._update_tickets_status()
+
+    def _update_tickets_status(self) -> None:
+        if self.book is None:
+            return
+        ready = len(self.book.configured(3))
+        total = len(self.arcana_rows) or 11
+        self.tickets_status.setText(
+            f"Заполнено арканов: {ready} из {total}. "
+            + ("Можно запускать агента." if ready
+               else "Пока не заполнен ни один аркан — агенту не на ком играть.")
+        )
+
+    def on_tickets_save(self) -> None:
+        if self.book is None:
+            return
+        for key, row in self.arcana_rows.items():
+            names = [n.strip() for n in row["hero"].text().split(",") if n.strip()]
+            self.book.set_heroes(key, 3, names)
+            row["state"].setText("✓ готов" if names else "— не заполнен")
+        self.book.min_yield = self.in_yield.value()
+        self.book.save()
+        self.settings = self._collect_settings()
+        self.settings.save(paths.settings_file())
+        self._update_tickets_status()
+        self.append_log("success", f"таблица билетов сохранена → {paths.tickets_file()}")
+        self.append_log("info", "\n" + self.book.summary())
+
+    # -- управление агентом
 
     def on_start(self) -> None:
         if self.worker and self.worker.is_alive():
             return
         if not self.host.healthy:
-            QMessageBox.warning(self, "Scripts not loaded",
-                                "Some external scripts failed to load. Fix them in the "
-                                "Dev Console before starting the agent.")
+            QMessageBox.warning(
+                self, "Скрипты не загружены",
+                "Часть внешних скриптов не загрузилась. Исправьте их во вкладке "
+                "«Консоль разработчика», прежде чем запускать агента.")
             return
+
         self.settings = self._collect_settings()
         self.settings.save(paths.settings_file())
+
+        if self.book is not None and not self.book.configured(self.settings.min_ticket_yield):
+            QMessageBox.warning(
+                self, "Таблица билетов пуста",
+                "Не указан ни один герой с отдачей ×3.\n\n"
+                "Откройте вкладку «Билеты», впишите для нужных арканов героя из нижней "
+                "секции панели события и нажмите «Сохранить таблицу билетов».")
+            self.tabs.setCurrentIndex(1)
+            return
+
         if not self.settings.simulate:
             answer = QMessageBox.question(
-                self, "Live mode",
-                "Simulation mode is OFF — the agent will control the real mouse and "
-                "keyboard.\n\nStart in LIVE mode?",
-            )
+                self, "Боевой режим",
+                "Режим симуляции ВЫКЛЮЧЕН — агент будет управлять реальными мышью и "
+                "клавиатурой.\n\nЗапустить по-настоящему?")
             if answer != QMessageBox.Yes:
                 return
+
         self.worker = AgentWorker(self.host, self.settings, self.bridge)
         self.worker.start()
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
-        self.append_log("success", "agent started"
-                        + (" (SIMULATION)" if self.settings.simulate else " (LIVE)"))
+        self.append_log("success", "агент запущен"
+                        + (" (СИМУЛЯЦИЯ)" if self.settings.simulate else " (БОЕВОЙ РЕЖИМ)"))
 
     def on_pause(self) -> None:
         if not self.worker:
             return
         if self.worker.pause_event.is_set():
             self.worker.pause_event.clear()
-            self.btn_pause.setText("⏸  Pause")
-            self.append_log("info", "resumed")
+            self.btn_pause.setText("⏸  Пауза")
+            self.append_log("info", "работа возобновлена")
         else:
             self.worker.pause_event.set()
-            self.btn_pause.setText("▶  Resume")
-            self.append_log("warning", "paused")
+            self.btn_pause.setText("▶  Продолжить")
+            self.append_log("warning", "пауза")
 
     def on_stop(self) -> None:
         if self.worker and self.worker.is_alive():
             self.worker.stop_event.set()
             self.worker.pause_event.clear()
-            self.append_log("warning", "stop requested…")
+            self.append_log("warning", "запрошена остановка…")
         self.btn_stop.setEnabled(False)
 
     def on_finished(self, summary: dict) -> None:
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
-        self.btn_pause.setText("⏸  Pause")
+        self.btn_pause.setText("⏸  Пауза")
         self.btn_stop.setEnabled(False)
-        self.state_label.setText("idle")
-        self.append_log("info", f"session summary: {summary}")
+        self.state_label.setText("ожидание")
+        self.append_log("info", f"итоги сессии: {summary}")
 
     def on_state_changed(self, state: str) -> None:
-        self.state_label.setText(state)
+        self.state_label.setText(RU_STATES.get(state, state))
 
     def on_cycle_done(self, record) -> None:
-        self.cycle_label.setText(f"cycles: {getattr(record, 'index', 0) + 1}")
+        self.cycle_label.setText(f"циклов: {getattr(record, 'index', 0) + 1}")
 
     def on_stats(self, stats: dict) -> None:
         tickets = stats.get("tickets", {})
-        self.tickets_label.setText(
-            "tickets: " + (", ".join(f"{k}×{v}" for k, v in tickets.items()) or "—")
-        )
+        try:
+            logic = self.host.get("dota_logic")
+            pretty = ", ".join(f"{logic.arcana_name_ru(k)}×{v}" for k, v in tickets.items())
+        except Exception:
+            pretty = ", ".join(f"{k}×{v}" for k, v in tickets.items())
+        self.tickets_label.setText("билеты: " + (pretty or "—"))
 
-    # -- dev console
+    # -- консоль разработчика
 
     def on_open_script(self) -> None:
         name = self.script_picker.currentText()
         try:
             self.editor.setPlainText(self.host.source_of(name))
-            self.append_log("info", f"loaded {name}.py into the editor")
+            self.append_log("info", f"{name}.py открыт в редакторе")
         except OSError as exc:
-            self.append_log("error", f"cannot read {name}.py: {exc}")
+            self.append_log("error", f"не удалось прочитать {name}.py: {exc}")
 
     def on_apply_script(self) -> None:
         name = self.script_picker.currentText()
         source = self.editor.toPlainText()
         if not source.strip():
-            self.append_log("warning", "editor is empty — nothing to apply")
+            self.append_log("warning", "редактор пуст — применять нечего")
             return
         try:
             result = self.host.write_script(name, source, reload=True)
         except Exception as exc:
-            self.append_log("error", f"rejected: {exc}")
+            self.append_log("error", f"код отклонён: {exc}")
             return
         self.append_log("success" if result.ok else "error",
-                        f"{name}.py → {'reloaded' if result.ok else result.error}")
+                        f"{name}.py → {'перезагружен' if result.ok else result.error}")
         self.refresh_script_status()
-        self.refresh_hero_list()
+        self.refresh_tickets_tab()
 
     def on_reload_all(self) -> None:
         if self.worker and self.worker.is_alive():
-            self.append_log("warning", "stop the agent before reloading all scripts")
+            self.append_log("warning", "сначала остановите агента")
             return
-        results = self.host.reload_all()
-        for r in results:
+        for r in self.host.reload_all():
             self.append_log("success" if r.ok else "error",
                             f"{'✓' if r.ok else '✗'} {r.name}.py {r.error}")
         self.refresh_script_status()
-        self.refresh_hero_list()
+        self.refresh_tickets_tab()
 
     def on_rollback(self) -> None:
         name = self.script_picker.currentText()
         if self.host.rollback(name):
-            self.append_log("success", f"{name}.py rolled back and reloaded")
+            self.append_log("success", f"{name}.py откачен и перезагружен")
         self.refresh_script_status()
 
     # -- OTA
@@ -640,7 +784,7 @@ class MainWindow(QMainWindow):
         self.settings = self._collect_settings()
         self.settings.save(paths.settings_file())
         self.ota = OtaClient(self._ota_config())
-        self.append_log("success", f"settings saved → {paths.settings_file()}")
+        self.append_log("success", f"настройки сохранены → {paths.settings_file()}")
 
     def on_list_remote(self) -> None:
         self.on_save_settings()
@@ -650,17 +794,16 @@ class MainWindow(QMainWindow):
             self.ota_output.appendPlainText(f"✗ {exc}")
             return
         self.ota_output.appendPlainText(
-            f"remote scripts in {self.ota.config.slug}@{self.ota.config.branch}"
-            f"/{self.ota.config.path}:\n  " + "\n  ".join(names)
-        )
+            f"скрипты в {self.ota.config.slug}@{self.ota.config.branch}"
+            f"/{self.ota.config.path}:\n  " + "\n  ".join(names))
 
     def on_sync(self) -> None:
         if self.worker and self.worker.is_alive():
-            self.append_log("warning", "stop the agent before syncing scripts")
+            self.append_log("warning", "сначала остановите агента")
             return
         self.on_save_settings()
         self.ota_output.appendPlainText(
-            f"→ syncing from {self.ota.config.slug}@{self.ota.config.branch}…")
+            f"→ загрузка из {self.ota.config.slug}@{self.ota.config.branch}…")
         results = self.ota.sync(
             self.host,
             on_log=lambda level, msg: (self.append_log(level, msg),
@@ -669,14 +812,15 @@ class MainWindow(QMainWindow):
         changed = sum(1 for r in results if r.changed)
         failed = [r.name for r in results if not r.ok]
         self.ota_output.appendPlainText(
-            f"← done: {changed} updated, {len(results) - changed - len(failed)} unchanged, "
-            f"{len(failed)} failed {failed if failed else ''}")
+            f"← готово: обновлено {changed}, без изменений "
+            f"{len(results) - changed - len(failed)}, с ошибкой {len(failed)} "
+            f"{failed if failed else ''}")
         self.refresh_script_status()
-        self.refresh_hero_list()
+        self.refresh_tickets_tab()
 
-    # -- lifecycle
+    # -- завершение
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+    def closeEvent(self, event) -> None:  # noqa: N802 - имя из Qt
         if self.worker and self.worker.is_alive():
             self.worker.stop_event.set()
             self.worker.join(timeout=5.0)
@@ -689,7 +833,7 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     setup_logging()
-    log.info("Dark Carnival RPA v%s starting (frozen=%s)", __version__, paths.is_frozen())
+    log.info("Тёмный карнавал v%s запускается (сборка exe: %s)", __version__, paths.is_frozen())
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_QSS)
     window = MainWindow()

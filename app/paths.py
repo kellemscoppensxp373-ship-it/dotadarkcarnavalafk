@@ -70,11 +70,17 @@ def brain_file() -> Path:
     return data_dir() / "brain.json"
 
 
+def tickets_file() -> Path:
+    """Таблица «аркан → герой ×3», редактируемая на вкладке «Билеты»."""
+    return data_dir() / "tickets.json"
+
+
 def log_file() -> Path:
     return data_dir() / "agent.log"
 
 
 __all__ = [
     "is_frozen", "app_dir", "bundle_dir", "scripts_dir", "assets_dir",
-    "data_dir", "backups_dir", "settings_file", "brain_file", "log_file",
+    "data_dir", "backups_dir", "settings_file", "brain_file", "tickets_file",
+    "log_file",
 ]

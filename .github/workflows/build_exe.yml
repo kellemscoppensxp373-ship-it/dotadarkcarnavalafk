@@ -86,6 +86,7 @@ jobs:
             "$out/scripts/vision.py",
             "$out/scripts/executor.py",
             "$out/scripts/dota_logic.py",
+            "$out/scripts/tickets.py",
             "$out/scripts/learning.py",
             "$out/scripts/input_handler.py"
           )

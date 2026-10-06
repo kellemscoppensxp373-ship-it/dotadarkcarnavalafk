@@ -48,18 +48,55 @@ def gui(tmp_path, monkeypatch):
 
 def test_window_loads_all_external_scripts_on_start(gui):
     assert gui.host.healthy
-    assert set(gui.host.modules) == set(main_order(gui))
+    assert set(gui.host.modules) == set(gui.host.order)
 
 
-def main_order(gui):
-    return set(gui.host.order)
+# ----------------------------------------------------------------- вкладка «Билеты»
 
 
-def test_hero_list_is_populated_from_the_external_db(gui):
-    assert gui.hero_list.count() >= 10
-    labels = [gui.hero_list.item(i).text() for i in range(gui.hero_list.count())]
-    assert any("Фантом Ассасин" in label for label in labels)
-    assert any("emoji_pa.png" in label and "portrait_pa.png" in label for label in labels)
+def test_tickets_tab_lists_all_eleven_arcana(gui):
+    assert len(gui.arcana_rows) == 11
+    names = {row["name"]._label for row in gui.arcana_rows.values()}
+    assert "ШУТ" in names and "КОЛЕСО ФОРТУНЫ" in names and "ЗВЕЗДА" in names
+
+
+def test_tickets_tab_starts_empty_and_says_so(gui):
+    assert gui.book.is_empty()
+    assert "0" in gui.tickets_status._label
+    assert "не заполнен" in gui.tickets_status._label
+
+
+def test_saving_the_tickets_tab_persists_to_json(gui):
+    from app import paths
+
+    gui.arcana_rows["death"]["hero"].setText("Фантом Ассасин")
+    gui.arcana_rows["death"]["target"].setValue(9)
+    gui.on_tickets_save()
+
+    assert paths.tickets_file().is_file()
+    assert gui.book.heroes_for("death", 3) == ["Фантом Ассасин"]
+    assert gui.settings.ticket_target["death"] == 9
+    # и переживает перечитывание
+    gui.refresh_tickets_tab()
+    assert gui.arcana_rows["death"]["hero"]._text == "Фантом Ассасин"
+
+
+def test_several_heroes_per_arcana_are_supported(gui):
+    gui.arcana_rows["star"]["hero"].setText("Лина, Зевс")
+    gui.on_tickets_save()
+    assert gui.book.heroes_for("star", 3) == ["Лина", "Зевс"]
+
+
+def test_start_is_blocked_while_the_ticket_book_is_empty(gui):
+    """Главная защита: без заполненной таблицы агент просто не стартует."""
+    gui.on_start()
+    assert gui.worker is None
+
+
+def test_start_is_allowed_once_an_arcana_is_configured(gui):
+    gui.arcana_rows["death"]["hero"].setText("Фантом Ассасин")
+    gui.on_tickets_save()
+    assert gui.book.configured(3) == ["death"]
 
 
 def test_script_status_panel_lists_every_module(gui):
@@ -79,10 +116,17 @@ def test_log_escapes_html(gui):
     assert "&lt;script&gt;" in gui.log_view.toPlainText()
 
 
-def test_state_and_stats_signals_update_the_labels(gui):
+def test_state_label_is_translated_to_russian(gui):
     gui.bridge.state_changed.emit("hero_pick")
-    gui.bridge.state_changed.emit("in_game")
-    gui.bridge.stats_updated.emit({"tickets": {"Death": 3}})
+    assert gui.state_label._label == "выбор героя"
+    gui.bridge.state_changed.emit("safe_to_leave")
+    assert gui.state_label._label == "можно выходить"
+
+
+def test_ticket_counters_are_shown_with_russian_arcana_names(gui):
+    gui.bridge.stats_updated.emit({"tickets": {"death": 6, "jester": 3}})
+    assert "СМЕРТЬ×6" in gui.tickets_label._label
+    assert "ШУТ×3" in gui.tickets_label._label
     gui.bridge.action.emit("click:accept")
 
 
@@ -199,12 +243,16 @@ def test_list_remote_scripts_renders(gui, monkeypatch):
 def test_worker_builds_an_executor_from_loaded_scripts(gui):
     import main
 
+    gui.arcana_rows["death"]["hero"].setText("Фантом Ассасин")
+    gui.on_tickets_save()
     gui.settings.simulate = True
     worker = main.AgentWorker(gui.host, gui.settings, gui.bridge)
     executor = worker.build()
     assert executor.config.simulate is True
     assert executor.logic is gui.host.get("dota_logic")
-    assert executor.inputs.backend.name == "dryrun"     # simulation never touches the OS
+    assert executor.inputs.backend.name == "dryrun"     # симуляция не трогает ОС
+    assert executor.config.min_ticket_yield == 3        # только «тройные» герои
+    assert executor.book.heroes_for("death", 3) == ["Фантом Ассасин"]
 
 
 def test_start_is_blocked_while_scripts_are_broken(gui, monkeypatch):

@@ -106,3 +106,11 @@ def brain(tmp_path):
     import learning
 
     return learning.LearningStore(str(tmp_path / "brain.json"), autosave=False)
+
+
+@pytest.fixture
+def book(tmp_path):
+    """Пустая таблица билетов во временной папке."""
+    import tickets
+
+    return tickets.TicketBook(path=str(tmp_path / "tickets.json"))

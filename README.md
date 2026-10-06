@@ -1,5 +1,8 @@
 # Dark Carnival — Cognitive RPA Agent
 
+> 🇷🇺 **Пользователям:** пошаговая инструкция на русском — [ИНСТРУКЦИЯ.md](ИНСТРУКЦИЯ.md).
+> Интерфейс программы полностью русифицирован.
+
 A production-grade, modular **Cognitive RPA** desktop agent that automates the cyclical
 Dota 2 *Dark Carnival* co-op-bots loop on a **fully Russian game client**.
 
@@ -132,6 +135,29 @@ region first.
 
 ---
 
+## Ticket economy — 11 Tarot arcana, ×3 only
+
+The event groups rewards into 11 arcana panels (ШУТ, МАГ, ВЕРХОВНАЯ ЖРИЦА, ИМПЕРАТОР,
+ВЛЮБЛЁННЫЕ, СИЛА, ОТШЕЛЬНИК, КОЛЕСО ФОРТУНЫ, СМЕРТЬ, ДЬЯВОЛ, ЗВЕЗДА). Each panel has
+three sections — heroes worth **1**, **2** or **3** tickets per game.
+
+A ×3 game costs exactly as much time as a ×1 game, so the planner is hard-wired to
+`min_yield = 3`: heroes below that are never considered. Lower it only if a given arcana
+has no ×3 hero you can play.
+
+Which hero sits in which section **cannot be derived from the pixel-art icons** (35×35 px)
+and Valve reshuffles them between event patches — so the mapping is *data*, not code. It
+lives in `data/tickets.json` and is edited on the **«Билеты»** tab:
+
+```json
+{ "min_yield": 3,
+  "arcana": { "death": { "name_ru": "СМЕРТЬ", "x3": ["Фантом Ассасин"], "x2": [], "x1": [] } } }
+```
+
+With an empty table the agent refuses to start and says exactly what to fill in — it
+never burns games on guesses. `plan_next_pick()` then targets the arcana with the biggest
+remaining gap, rotates between equally good heroes, and stops once the goal is met.
+
 ## Phase 3 — Dual-asset hero database
 
 The event UI draws heroes **twice**: pixel-art emojis on the ticket/reward screen, and
@@ -152,7 +178,9 @@ HERO_DB = {
 }
 ```
 
-Hero selection is a three-stage cascade, so a missing or stale sprite never stalls a run:
+Heroes are resolved **by name**, so all 120+ heroes work without any PNG at all; the
+sprites merely make it faster and let the agent visually confirm the reward. Selection is
+a three-stage cascade, so a missing or stale sprite never stalls a run:
 
 1. type the Russian name into the search field (clipboard paste — pyautogui cannot type
    Cyrillic),
@@ -215,7 +243,7 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-171 tests, ~2 seconds, no game required. The suite includes a scripted **fake Russian
+201 tests, ~3 seconds, no game required. The suite includes a scripted **fake Russian
 Dota client** (`tests/fake_dota.py`) that renders Cyrillic captions, crops regions like a
 real OCR pass, and reacts to synthesised clicks — the agent plays complete cycles against
 it in CI. `tests/qt_stub.py` lets the real `MainWindow` be driven headless.
@@ -229,8 +257,9 @@ it in CI. `tests/qt_stub.py` lets the real `MainWindow` be driven headless.
 | Key | Meaning |
 |---|---|
 | `simulate` | `true` = never touch the real mouse/keyboard |
-| `hero_pool` | hero keys the planner may choose from |
-| `ticket_target` | e.g. `{"Death": 12, "Chaos": 4}` — steers hero choice |
+| `ticket_target` | e.g. `{"death": 30, "jester": 12}` — per-arcana goal |
+| `min_ticket_yield` | `3` = only play heroes worth 3 tickets |
+| `avoid_heroes` | hero names the planner must skip |
 | `max_cycles` | `0` = unlimited |
 | `match_threshold` | OCR fuzzy-match floor (default `0.78`) |
 | `ocr_gpu` | CUDA for EasyOCR |

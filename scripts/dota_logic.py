@@ -4,14 +4,12 @@ dota_logic.py — Domain knowledge for the Dark Carnival co-op-bots farming loop
 Contains three things and nothing else (no I/O, no OCR, no clicking — this file is pure
 logic and is therefore 100% unit-testable):
 
-1. **HERO_DB** — the dual-asset hero database. The event UI renders heroes as *pixel-art
-   emojis* on the ticket/reward screen, while the pick screen renders *high-res 3D
-   portraits*. Same hero, two completely different sprites, so every entry carries both
-   plus the Russian localisation string used to drive the hero search field.
-2. **Ticket economy** — which hero grants which carnival tickets, and a planner that
-   chooses the next hero to pick given what the user still needs.
-3. **The state machine** — the canonical cycle of the automation loop, expressed as
-   states + the Russian keywords that *prove* the client is in that state.
+1. **HERO_DB** — реестр героев с двумя наборами спрайтов: пиксельная иконка (экран
+   наград) и 3D-портрет (сетка выбора), плюс русское имя для поля поиска.
+2. **Экономика билетов** — вынесена в ``tickets.py`` (11 арканов, отдача ×1/×2/×3)
+   и реэкспортируется отсюда. Приоритет — только ×3.
+3. **Машина состояний** — цикл автоматизации и русские слова-доказательства
+   каждого состояния.
 
 Resolution independence: all screen regions are expressed as fractions of the client
 size and materialised at runtime via ``vision.relative_region``.
@@ -19,175 +17,121 @@ size and materialised at runtime via ``vision.relative_region``.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 # --------------------------------------------------------------------------------------
-# Ticket economy
+# Экономика билетов — вынесена в tickets.py (11 арканов, отдача ×1/×2/×3)
 # --------------------------------------------------------------------------------------
-
-#: Canonical Dark Carnival ticket types, with their Russian captions as rendered in the
-#: reward/ticket screen. The vision layer reads the Russian form; the logic layer speaks
-#: the English key.
-TICKET_TYPES: dict[str, str] = {
-    "Death": "Смерть",
-    "Blood": "Кровь",
-    "Chaos": "Хаос",
-    "Mystery": "Тайна",
-    "Fortune": "Удача",
-    "Beast": "Зверь",
-}
-
-TICKET_RU_TO_KEY: dict[str, str] = {v: k for k, v in TICKET_TYPES.items()}
-
+# Реэкспорт, чтобы остальной код (и внешние скрипты) обращались к одному модулю.
+from tickets import (  # noqa: E402  (внешний скрипт-сосед, загружается ScriptHost)
+    ARCANA,
+    DEFAULT_MIN_YIELD,
+    YIELDS,
+    Pick,
+    TicketBook,
+    TicketGoal,
+    arcana_name_ru,
+    arcana_order,
+    find_arcana_by_ru,
+    plan_next_pick,
+)
 
 # --------------------------------------------------------------------------------------
-# PHASE 3 — DUAL-ASSET HERO DATABASE
+# ЭТАП 3 — РЕЕСТР ГЕРОЕВ С ДВУМЯ НАБОРАМИ СПРАЙТОВ
 # --------------------------------------------------------------------------------------
 #
-#   "emoji_img"    -> pixel-art sprite, used to parse the TICKET / REWARD screen
-#   "portrait_img" -> 3D portrait,      used to find the hero in the PICK GRID
-#   "name_ru"      -> official RU localisation, pasted into the hero search field
-#   "grants_tickets" -> the tickets this hero's completed game awards
+#   "emoji_img"    -> пиксельная иконка — экран наград/билетов
+#   "portrait_img" -> 3D-портрет        -> сетка выбора героя
+#   "name_ru"      -> официальная русская локализация (вставляется в поиск героя)
 #
-# Asset files live under assets/emoji/<emoji_img> and assets/portraits/<portrait_img>.
+# Файлы лежат в assets/emoji/<emoji_img> и assets/portraits/<portrait_img>.
+#
+# ВАЖНО: эта таблица — только реестр спрайтов и имён. Сколько билетов даёт герой,
+# здесь НЕ хранится: это зависит от аркана и задаётся оператором в data/tickets.json
+# (вкладка «Билеты»), потому что состав секций меняется между патчами события.
 
 HERO_DB: dict[str, dict] = {
     "phantom_assassin": {
         "name_ru": "Фантом Ассасин",
-        "aliases_ru": ["Фантомка", "Фантом-ассасин", "ФА"],
+        "aliases_ru": ["Фантомка", "ФА"],
         "emoji_img": "emoji_pa.png",
         "portrait_img": "portrait_pa.png",
-        "grants_tickets": ["Death", "Death", "Death"],
-        "tier": 3,
-        "role": "carry",
-        "bot_difficulty": "easy",
+        "role": "carry", "bot_difficulty": "easy",
     },
     "juggernaut": {
-        "name_ru": "Джаггернаут",
-        "aliases_ru": ["Джаг", "Джага"],
-        "emoji_img": "emoji_jugg.png",
-        "portrait_img": "portrait_jugg.png",
-        "grants_tickets": ["Blood", "Blood", "Death"],
-        "tier": 3,
-        "role": "carry",
-        "bot_difficulty": "easy",
+        "name_ru": "Джаггернаут", "aliases_ru": ["Джаг"],
+        "emoji_img": "emoji_jugg.png", "portrait_img": "portrait_jugg.png",
+        "role": "carry", "bot_difficulty": "easy",
     },
     "lina": {
-        "name_ru": "Лина",
-        "aliases_ru": ["Лину"],
-        "emoji_img": "emoji_lina.png",
-        "portrait_img": "portrait_lina.png",
-        "grants_tickets": ["Chaos", "Chaos"],
-        "tier": 2,
-        "role": "mid",
-        "bot_difficulty": "easy",
+        "name_ru": "Лина", "aliases_ru": [],
+        "emoji_img": "emoji_lina.png", "portrait_img": "portrait_lina.png",
+        "role": "mid", "bot_difficulty": "easy",
     },
     "lion": {
-        "name_ru": "Лион",
-        "aliases_ru": [],
-        "emoji_img": "emoji_lion.png",
-        "portrait_img": "portrait_lion.png",
-        "grants_tickets": ["Death", "Mystery"],
-        "tier": 2,
-        "role": "support",
-        "bot_difficulty": "easy",
+        "name_ru": "Лион", "aliases_ru": [],
+        "emoji_img": "emoji_lion.png", "portrait_img": "portrait_lion.png",
+        "role": "support", "bot_difficulty": "easy",
     },
     "crystal_maiden": {
-        "name_ru": "Кристал Мейден",
-        "aliases_ru": ["Кристальная дева", "КМ"],
-        "emoji_img": "emoji_cm.png",
-        "portrait_img": "portrait_cm.png",
-        "grants_tickets": ["Mystery", "Fortune"],
-        "tier": 2,
-        "role": "support",
-        "bot_difficulty": "easy",
+        "name_ru": "Кристал Мейден", "aliases_ru": ["Кристальная дева", "КМ"],
+        "emoji_img": "emoji_cm.png", "portrait_img": "portrait_cm.png",
+        "role": "support", "bot_difficulty": "easy",
     },
     "sniper": {
-        "name_ru": "Снайпер",
-        "aliases_ru": [],
-        "emoji_img": "emoji_sniper.png",
-        "portrait_img": "portrait_sniper.png",
-        "grants_tickets": ["Fortune", "Fortune"],
-        "tier": 2,
-        "role": "carry",
-        "bot_difficulty": "easy",
+        "name_ru": "Снайпер", "aliases_ru": [],
+        "emoji_img": "emoji_sniper.png", "portrait_img": "portrait_sniper.png",
+        "role": "carry", "bot_difficulty": "easy",
     },
     "ursa": {
-        "name_ru": "Урса",
-        "aliases_ru": [],
-        "emoji_img": "emoji_ursa.png",
-        "portrait_img": "portrait_ursa.png",
-        "grants_tickets": ["Beast", "Beast", "Blood"],
-        "tier": 3,
-        "role": "carry",
-        "bot_difficulty": "medium",
+        "name_ru": "Урса", "aliases_ru": [],
+        "emoji_img": "emoji_ursa.png", "portrait_img": "portrait_ursa.png",
+        "role": "carry", "bot_difficulty": "medium",
     },
     "lycan": {
-        "name_ru": "Ликан",
-        "aliases_ru": ["Ликантроп"],
-        "emoji_img": "emoji_lycan.png",
-        "portrait_img": "portrait_lycan.png",
-        "grants_tickets": ["Beast", "Blood"],
-        "tier": 2,
-        "role": "offlane",
-        "bot_difficulty": "medium",
+        "name_ru": "Ликан", "aliases_ru": ["Ликантроп"],
+        "emoji_img": "emoji_lycan.png", "portrait_img": "portrait_lycan.png",
+        "role": "offlane", "bot_difficulty": "medium",
     },
     "axe": {
-        "name_ru": "Акс",
-        "aliases_ru": ["Топор"],
-        "emoji_img": "emoji_axe.png",
-        "portrait_img": "portrait_axe.png",
-        "grants_tickets": ["Blood", "Chaos"],
-        "tier": 2,
-        "role": "offlane",
-        "bot_difficulty": "easy",
+        "name_ru": "Акс", "aliases_ru": ["Топор"],
+        "emoji_img": "emoji_axe.png", "portrait_img": "portrait_axe.png",
+        "role": "offlane", "bot_difficulty": "easy",
     },
     "shadow_fiend": {
-        "name_ru": "Шэдоу Филд",
-        "aliases_ru": ["Невермор", "СФ"],
-        "emoji_img": "emoji_sf.png",
-        "portrait_img": "portrait_sf.png",
-        "grants_tickets": ["Death", "Chaos", "Mystery"],
-        "tier": 3,
-        "role": "mid",
-        "bot_difficulty": "medium",
+        "name_ru": "Шэдоу Филд", "aliases_ru": ["Невермор", "СФ"],
+        "emoji_img": "emoji_sf.png", "portrait_img": "portrait_sf.png",
+        "role": "mid", "bot_difficulty": "medium",
     },
     "wraith_king": {
-        "name_ru": "Призрачный Король",
-        "aliases_ru": ["ВК", "Скелет"],
-        "emoji_img": "emoji_wk.png",
-        "portrait_img": "portrait_wk.png",
-        "grants_tickets": ["Death", "Death", "Fortune"],
-        "tier": 3,
-        "role": "carry",
-        "bot_difficulty": "easy",
+        "name_ru": "Призрачный Король", "aliases_ru": ["ВК", "Скелет"],
+        "emoji_img": "emoji_wk.png", "portrait_img": "portrait_wk.png",
+        "role": "carry", "bot_difficulty": "easy",
     },
     "zeus": {
-        "name_ru": "Зевс",
-        "aliases_ru": [],
-        "emoji_img": "emoji_zeus.png",
-        "portrait_img": "portrait_zeus.png",
-        "grants_tickets": ["Chaos", "Fortune"],
-        "tier": 2,
-        "role": "mid",
-        "bot_difficulty": "easy",
+        "name_ru": "Зевс", "aliases_ru": [],
+        "emoji_img": "emoji_zeus.png", "portrait_img": "portrait_zeus.png",
+        "role": "mid", "bot_difficulty": "easy",
     },
 }
 
 
+def _slug(name: str) -> str:
+    """Служебный ключ для героя, которого нет в реестре спрайтов."""
+    return "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower()).strip("_")
+
+
 @dataclass(frozen=True, slots=True)
 class Hero:
-    """Typed view over a HERO_DB row."""
+    """Герой: русское имя для поиска + (опционально) спрайты."""
 
     key: str
     name_ru: str
-    emoji_img: str
-    portrait_img: str
-    grants_tickets: tuple[str, ...]
+    emoji_img: str = ""
+    portrait_img: str = ""
     aliases_ru: tuple[str, ...] = ()
-    tier: int = 1
     role: str = "unknown"
     bot_difficulty: str = "easy"
 
@@ -195,33 +139,29 @@ class Hero:
     def all_names_ru(self) -> tuple[str, ...]:
         return (self.name_ru, *self.aliases_ru)
 
+    @property
+    def has_assets(self) -> bool:
+        return bool(self.emoji_img and self.portrait_img)
+
     def emoji_path(self, assets_dir: str = "assets") -> str:
-        return f"{assets_dir}/emoji/{self.emoji_img}"
+        return f"{assets_dir}/emoji/{self.emoji_img}" if self.emoji_img else ""
 
     def portrait_path(self, assets_dir: str = "assets") -> str:
-        return f"{assets_dir}/portraits/{self.portrait_img}"
-
-    def ticket_counts(self) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for t in self.grants_tickets:
-            out[t] = out.get(t, 0) + 1
-        return out
+        return f"{assets_dir}/portraits/{self.portrait_img}" if self.portrait_img else ""
 
 
 def get_hero(key: str) -> Hero:
-    """Materialise a :class:`Hero` from the raw DB, raising a clear error if unknown."""
+    """Герой из реестра по ключу."""
     try:
         row = HERO_DB[key]
     except KeyError as exc:
-        raise KeyError(f"unknown hero key {key!r}; known: {sorted(HERO_DB)}") from exc
+        raise KeyError(f"неизвестный герой {key!r}; известные: {sorted(HERO_DB)}") from exc
     return Hero(
         key=key,
         name_ru=row["name_ru"],
-        emoji_img=row["emoji_img"],
-        portrait_img=row["portrait_img"],
-        grants_tickets=tuple(row.get("grants_tickets", ())),
+        emoji_img=row.get("emoji_img", ""),
+        portrait_img=row.get("portrait_img", ""),
         aliases_ru=tuple(row.get("aliases_ru", ())),
-        tier=int(row.get("tier", 1)),
         role=row.get("role", "unknown"),
         bot_difficulty=row.get("bot_difficulty", "easy"),
     )
@@ -231,22 +171,11 @@ def all_heroes() -> list[Hero]:
     return [get_hero(k) for k in HERO_DB]
 
 
-def heroes_granting(ticket: str) -> list[Hero]:
-    """Every hero whose completed game awards ``ticket``, richest first."""
-    out = [h for h in all_heroes() if ticket in h.grants_tickets]
-    out.sort(key=lambda h: (h.ticket_counts().get(ticket, 0), h.tier), reverse=True)
-    return out
-
-
 def find_hero_by_ru(name: str, min_score: float = 0.74) -> Hero | None:
-    """Resolve an OCR-read Russian hero name (fuzzy) back to a DB entry.
-
-    Imports the matcher from ``vision`` lazily so this module stays dependency-free
-    when used standalone (e.g. in tests or tooling).
-    """
+    """Найти героя реестра по русскому имени (с устойчивостью к ошибкам OCR)."""
     try:
-        from vision import text_similarity  # external-script sibling import
-    except Exception:  # pragma: no cover - fallback for packaged imports
+        from vision import text_similarity
+    except Exception:  # pragma: no cover
         from difflib import SequenceMatcher
 
         def text_similarity(a: str, b: str) -> float:
@@ -261,71 +190,27 @@ def find_hero_by_ru(name: str, min_score: float = 0.74) -> Hero | None:
     return best if best_score >= min_score else None
 
 
+def resolve_hero(name_ru: str) -> Hero:
+    """Превратить имя из таблицы билетов в объект героя.
+
+    Если героя нет в реестре спрайтов — он всё равно полностью рабочий: имя
+    вводится в поиск, а выбор подтверждается чтением названия в сетке (OCR).
+    Так бот поддерживает любого из 120+ героев, не требуя заранее нарезанных PNG.
+    """
+    known = find_hero_by_ru(name_ru, min_score=0.88)
+    if known is not None:
+        return known
+    return Hero(key=_slug(name_ru), name_ru=name_ru.strip())
+
+
 def emoji_asset_map(assets_dir: str = "assets") -> dict[str, str]:
-    """``{hero_key: path}`` for the *ticket/reward* screen (pixel-art emojis)."""
-    return {h.key: h.emoji_path(assets_dir) for h in all_heroes()}
+    """``{ключ: путь}`` для экрана наград (пиксельные иконки)."""
+    return {h.key: h.emoji_path(assets_dir) for h in all_heroes() if h.emoji_img}
 
 
 def portrait_asset_map(assets_dir: str = "assets") -> dict[str, str]:
-    """``{hero_key: path}`` for the *pick grid* (3D portraits)."""
-    return {h.key: h.portrait_path(assets_dir) for h in all_heroes()}
-
-
-# --------------------------------------------------------------------------------------
-# Ticket planning
-# --------------------------------------------------------------------------------------
-
-
-@dataclass
-class TicketGoal:
-    """What the operator still wants, and what they already banked."""
-
-    target: dict[str, int] = field(default_factory=dict)
-    owned: dict[str, int] = field(default_factory=dict)
-
-    def remaining(self) -> dict[str, int]:
-        return {k: max(0, v - self.owned.get(k, 0)) for k, v in self.target.items()}
-
-    def satisfied(self) -> bool:
-        return all(v == 0 for v in self.remaining().values())
-
-    def credit(self, tickets: Iterable[str]) -> None:
-        for t in tickets:
-            self.owned[t] = self.owned.get(t, 0) + 1
-
-    def score_hero(self, hero: Hero) -> int:
-        """How many *still-needed* tickets one game on this hero would deliver."""
-        remaining = self.remaining()
-        total = 0
-        for ticket, count in hero.ticket_counts().items():
-            total += min(count, remaining.get(ticket, 0))
-        return total
-
-
-def plan_next_hero(
-    goal: TicketGoal,
-    *,
-    allowed: Sequence[str] | None = None,
-    avoid: Sequence[str] = (),
-) -> Hero | None:
-    """Greedy planner: the hero that closes the most of the remaining ticket gap.
-
-    Ties break toward the lower-tier (= faster, easier bot game) hero, which empirically
-    beats picking the flashiest carry every cycle.
-    """
-    pool = [get_hero(k) for k in (allowed if allowed is not None else list(HERO_DB))]
-    pool = [h for h in pool if h.key not in set(avoid)]
-    if not pool:
-        return None
-    if goal.satisfied():
-        # Nothing specific needed — grind the easiest hero available.
-        return min(pool, key=lambda h: (h.tier, h.key))
-    scored = [(goal.score_hero(h), -h.tier, h.key, h) for h in pool]
-    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    best_score = scored[0][0]
-    if best_score <= 0:
-        return min(pool, key=lambda h: (h.tier, h.key))
-    return scored[0][3]
+    """``{ключ: путь}`` для сетки выбора (3D-портреты)."""
+    return {h.key: h.portrait_path(assets_dir) for h in all_heroes() if h.portrait_img}
 
 
 # --------------------------------------------------------------------------------------
@@ -443,10 +328,14 @@ def region_for(name: str, screen_w: int, screen_h: int):
 class LoopConfig:
     """Operator-tunable parameters for one farming session."""
 
-    max_cycles: int = 0                       # 0 = unlimited
-    hero_pool: tuple[str, ...] = ("phantom_assassin", "juggernaut", "lina", "wraith_king")
+    max_cycles: int = 0                        # 0 = без ограничения
+    #: Сколько билетов каждого аркана нужно: {"death": 30, "jester": 12}
     ticket_target: dict[str, int] = field(default_factory=dict)
-    leave_early: bool = True                  # leave as soon as "безопасно покинуть" shows
+    #: Минимальная отдача за игру. 3 = играть только на «тройных» героях.
+    min_ticket_yield: int = DEFAULT_MIN_YIELD
+    avoid_heroes: tuple[str, ...] = ()         # имена героев, которых не брать
+    tickets_file: str = "data/tickets.json"
+    leave_early: bool = True                   # выходить по «можно безопасно покинуть»
     accept_timeout: float = 40.0
     queue_timeout: float = 420.0
     game_timeout: float = 3600.0
@@ -457,10 +346,20 @@ class LoopConfig:
     def goal(self) -> TicketGoal:
         return TicketGoal(target=dict(self.ticket_target))
 
+    def book(self) -> TicketBook:
+        book = TicketBook.load(self.tickets_file)
+        book.min_yield = self.min_ticket_yield
+        return book
+
 
 __all__ = [
-    "HERO_DB", "Hero", "get_hero", "all_heroes", "heroes_granting", "find_hero_by_ru",
-    "emoji_asset_map", "portrait_asset_map", "TICKET_TYPES", "TICKET_RU_TO_KEY",
-    "TicketGoal", "plan_next_hero", "GameState", "STATE_EVIDENCE", "classify_state",
-    "CYCLE_ORDER", "STATE_TIMEOUTS", "LAYOUT", "region_for", "LoopConfig",
+    # Герои
+    "HERO_DB", "Hero", "get_hero", "all_heroes", "find_hero_by_ru", "resolve_hero",
+    "emoji_asset_map", "portrait_asset_map",
+    # Билеты (реэкспорт из tickets.py)
+    "ARCANA", "YIELDS", "DEFAULT_MIN_YIELD", "TicketBook", "TicketGoal", "Pick",
+    "plan_next_pick", "arcana_order", "arcana_name_ru", "find_arcana_by_ru",
+    # Состояния и разметка экрана
+    "GameState", "STATE_EVIDENCE", "classify_state", "CYCLE_ORDER", "STATE_TIMEOUTS",
+    "LAYOUT", "region_for", "LoopConfig",
 ]

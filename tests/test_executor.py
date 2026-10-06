@@ -35,9 +35,14 @@ def world(tmp_path):
         backend=ClickSpy(client), seed=42, sleep=lambda _s: None
     )
     brain = learning.LearningStore(str(tmp_path / "brain.json"), autosave=False)
+    # Таблица билетов: по «тройному» герою на два аркана.
+    book = dota_logic.TicketBook(path=str(tmp_path / "tickets.json"))
+    book.set_heroes("death", 3, ["Фантом Ассасин"])
+    book.set_heroes("jester", 3, ["Лина"])
+    book.save()
     cfg = dota_logic.LoopConfig(
         max_cycles=2, poll_interval=1.0, simulate=True,
-        hero_pool=("phantom_assassin", "lina"),
+        tickets_file=str(tmp_path / "tickets.json"),
         assets_dir=str(tmp_path / "assets"),
     )
     logs: list[tuple[str, str]] = []
@@ -47,7 +52,7 @@ def world(tmp_path):
         events=events, sleep=sleep, clock=now,
     )
     return {"ex": ex, "client": client, "brain": brain, "logs": logs,
-            "logic": dota_logic, "clock": clock}
+            "logic": dota_logic, "clock": clock, "book": book}
 
 
 # ------------------------------------------------------------------ state detection
@@ -113,7 +118,8 @@ def test_hero_pick_types_russian_name_and_selects_portrait_fallback(world):
     client = world["client"]
     client.goto("hero_pick")
     ex = world["ex"]
-    ex.current_hero = world["logic"].get_hero("phantom_assassin")
+    ex.current_pick = world["logic"].Pick("Фантом Ассасин", "death", 3)
+    ex.current_hero = world["logic"].resolve_hero("Фантом Ассасин")
     ex.handle_hero_pick()
     assert "Фантом Ассасин" in client.typed        # Cyrillic search query
     labels = [c[2] for c in client.clicks]
@@ -121,19 +127,41 @@ def test_hero_pick_types_russian_name_and_selects_portrait_fallback(world):
     assert client.screen_name == "in_game"
 
 
-def test_planner_chooses_hero_from_the_configured_pool(world):
+def test_planner_only_picks_heroes_from_the_ticket_book(world):
     ex = world["ex"]
     world["client"].goto("dashboard")
     ex.handle_dashboard()
-    assert ex.current_hero.key in {"phantom_assassin", "lina"}
+    assert ex.current_hero.name_ru in {"Фантом Ассасин", "Лина"}
+    assert ex.current_pick.yield_ == 3
 
 
 def test_ticket_target_steers_the_hero_choice(world):
     ex = world["ex"]
-    ex.goal = world["logic"].TicketGoal(target={"Chaos": 4})
+    ex.goal = world["logic"].TicketGoal(target={"jester": 6})
     world["client"].goto("dashboard")
     ex.handle_dashboard()
-    assert ex.current_hero.key == "lina"           # the only Chaos source in the pool
+    assert ex.current_pick.arcana == "jester"
+    assert ex.current_hero.name_ru == "Лина"
+
+
+def test_agent_refuses_to_run_with_an_empty_ticket_book(world, tmp_path):
+    """Пустая таблица — честная остановка с инструкцией, а не случайные игры."""
+    ex = world["ex"]
+    ex.book = world["logic"].TicketBook(path=str(tmp_path / "empty.json"))
+    world["client"].goto("dashboard")
+    ex.handle_dashboard()
+    assert ex.current_hero is None
+    assert ex.stop_event.is_set()
+    assert any("Билеты" in m for _lvl, m in world["logs"])
+
+
+def test_session_stops_once_the_ticket_goal_is_met(world):
+    ex = world["ex"]
+    ex.config.max_cycles = 0
+    ex.goal = world["logic"].TicketGoal(target={"death": 3})
+    ex.run()
+    assert ex.goal.satisfied()
+    assert ex.goal.owned["death"] >= 3
 
 
 # ------------------------------------------------------------------- the full loop
@@ -150,12 +178,13 @@ def test_runs_two_complete_cycles_and_stops(world):
         <= set(client.transitions)
 
 
-def test_cycle_credits_the_expected_tickets(world):
+def test_cycle_credits_three_tickets_of_the_planned_arcana(world):
     ex = world["ex"]
     ex.run()
     earned = world["brain"].tickets_earned()
-    assert earned, "no tickets were recorded"
-    assert sum(earned.values()) > 0
+    assert earned, "билеты не зачислены"
+    assert sum(earned.values()) >= 3
+    assert all(v % 3 == 0 for v in earned.values()), "за игру должно идти ровно 3 билета"
 
 
 def test_stop_event_halts_the_loop_promptly(world):
@@ -233,11 +262,25 @@ def test_watchdog_escapes_a_stuck_state(world):
 
 
 def test_missing_template_assets_do_not_break_the_cycle(world):
-    """No .png files exist in the test workspace — the agent must fall back to OCR."""
+    """PNG в тестовой папке нет — агент обязан перейти на поиск по названию (OCR)."""
     ex = world["ex"]
     hero = world["logic"].get_hero("phantom_assassin")
     assert ex._click_hero_portrait(hero) is False
-    assert ex._harvest_rewards() == []      # no current_hero set → nothing credited
+    assert ex._harvest_rewards() == []      # герой не запланирован → начислять нечего
+
+
+def test_hero_without_sprites_is_still_playable(world):
+    """Героя нет в реестре PNG — цикл всё равно должен отработать по OCR."""
+    ex = world["ex"]
+    world["book"].set_heroes("death", 3, ["Тайдхантер"])
+    world["book"].save()
+    ex.book = world["logic"].TicketBook.load(world["book"].path)
+    ex.goal = world["logic"].TicketGoal(target={"death": 3})
+    world["client"].goto("dashboard")
+    ex.handle_dashboard()
+    assert ex.current_hero.name_ru == "Тайдхантер"
+    assert not ex.current_hero.has_assets
+    assert ex._harvest_rewards() == ["death"] * 3
 
 
 # ----------------------------------------------------------------------- learning

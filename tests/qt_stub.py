@@ -303,6 +303,18 @@ def _module(name: str, **attrs) -> types.ModuleType:
     return mod
 
 
+class _Label(_Widget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._label = args[0] if args and isinstance(args[0], str) else ""
+
+    def setText(self, text):
+        self._label = str(text)
+
+    def text(self):
+        return self._label
+
+
 def install() -> None:
     """Register the stub under ``PySide6`` in ``sys.modules``."""
     qt_core = _module(
@@ -331,6 +343,7 @@ def install() -> None:
         QLineEdit=_LineEdit,
         QListWidget=_ListWidget,
         QListWidgetItem=_ListWidgetItem,
+        QLabel=_Label,
         QMainWindow=type("QMainWindow", (_Widget,), {}),
         QMessageBox=_MessageBox,
         QPlainTextEdit=_TextEdit,

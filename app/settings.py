@@ -1,4 +1,4 @@
-"""Persistent GUI settings (JSON, atomic write)."""
+"""Настройки интерфейса (JSON, атомарная запись)."""
 
 from __future__ import annotations
 
@@ -23,17 +23,18 @@ class Settings:
     ota_token: str = ""
     auto_sync_on_start: bool = False
 
-    # Loop
-    hero_pool: list[str] = field(default_factory=lambda: [
-        "phantom_assassin", "juggernaut", "lina", "wraith_king",
-    ])
+    # Цикл фарма
     max_cycles: int = 0
+    #: {ключ аркана: сколько билетов нужно}, например {"death": 30}
     ticket_target: dict[str, int] = field(default_factory=dict)
+    #: Минимальная отдача за игру. 3 = играть только на «тройных» героях.
+    min_ticket_yield: int = 3
+    avoid_heroes: list[str] = field(default_factory=list)
     leave_early: bool = True
     poll_interval: float = 2.0
-    simulate: bool = True          # safe default: never move a real mouse unasked
+    simulate: bool = True          # безопасно по умолчанию: мышь не трогаем
 
-    # Vision
+    # Зрение
     ocr_gpu: bool = True
     match_threshold: float = 0.78
     upscale: float = 1.6

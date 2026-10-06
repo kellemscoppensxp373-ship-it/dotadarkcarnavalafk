@@ -39,6 +39,7 @@ DEFAULT_ORDER: tuple[str, ...] = (
     "vision",
     "input_handler",
     "learning",
+    "tickets",
     "dota_logic",
     "executor",
 )
