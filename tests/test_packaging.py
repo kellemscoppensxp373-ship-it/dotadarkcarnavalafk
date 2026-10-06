@@ -115,3 +115,34 @@ def test_launcher_script_exists_for_full_mode():
     assert launcher.exists(), "нужен понятный способ запустить полный режим"
     text = launcher.read_text(encoding="utf-8")
     assert "requirements.txt" in text and "main.py" in text
+
+
+# ------------------------------------------------------------------ понятные ошибки OTA
+
+
+def _client(branch="main"):
+    from app.ota import OtaClient, OtaConfig
+
+    return OtaClient(OtaConfig(owner="o", repo="r", branch=branch))
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (404, "файл не найден"),
+        (401, "отказал в доступе"),
+        (403, "отказал в доступе"),
+        (500, "сбой на стороне GitHub"),
+        (418, "кодом 418"),
+    ],
+)
+def test_http_errors_are_explained_in_russian(code, expected):
+    message = _client()._explain_http(code, "https://example/scripts/vision.py")
+    assert expected in message
+    assert message.isprintable()
+
+
+def test_404_names_the_branch_so_the_cause_is_obvious():
+    """Первый раз оператор увидел голый «HTTP 404» и не понял причину."""
+    message = _client(branch="dev")._explain_http(404, "https://example/x.py")
+    assert "dev" in message and "scripts/" in message

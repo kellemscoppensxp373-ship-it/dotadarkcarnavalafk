@@ -95,9 +95,31 @@ class OtaClient:
         try:
             return self._opener(url, self._headers(accept), self.config.timeout)
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"HTTP {exc.code} for {url}") from exc
+            raise RuntimeError(self._explain_http(exc.code, url)) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"network error for {url}: {exc.reason}") from exc
+            raise RuntimeError(
+                f"нет связи с GitHub ({exc.reason}). Проверьте интернет и "
+                f"не блокирует ли антивирус программу") from exc
+
+    def _explain_http(self, code: int, url: str) -> str:
+        """Понятное объяснение вместо голого кода ответа.
+
+        Коды GitHub сами по себе ничего не говорят оператору. Самый частый
+        случай — 404: ветка или файл просто ещё не существуют в репозитории.
+        """
+        cfg = self.config
+        if code == 404:
+            return (f"файл не найден в ветке «{cfg.branch}» репозитория {cfg.slug}. "
+                    f"Проверьте название ветки на вкладке «Обновление с GitHub»: "
+                    f"код должен быть залит именно туда, в папку scripts/. "
+                    f"Адрес, который запрашивался: {url}")
+        if code in (401, 403):
+            return (f"GitHub отказал в доступе (код {code}). Если репозиторий "
+                    f"приватный — укажите токен доступа в настройках обновления. "
+                    f"Также так выглядит превышение лимита запросов: подождите час.")
+        if code >= 500:
+            return f"сбой на стороне GitHub (код {code}), попробуйте позже"
+        return f"GitHub ответил кодом {code} на запрос {url}"
 
     # -- API -----------------------------------------------------------------------
 
