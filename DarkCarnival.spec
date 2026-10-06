@@ -27,13 +27,15 @@ PyInstaller строит список модулей, обходя импорт�
 import sys
 
 sys.path.insert(0, ".")
+# Сообщения ниже — только латиницей: консоль сборщика на Windows живёт в cp1251,
+# и кириллический print роняет весь .spec с UnicodeEncodeError.
 from app.packaging import HEAVY, build_hiddenimports, scan_script_imports  # noqa: E402
 
 block_cipher = None
 
 hidden = build_hiddenimports("scripts")
-print(f"[spec] импорты внешних скриптов: {sorted(scan_script_imports('scripts'))}")
-print(f"[spec] всего hiddenimports: {len(hidden)}")
+print("[spec] scanned script imports:", ", ".join(sorted(scan_script_imports("scripts"))))
+print("[spec] hiddenimports total:", len(hidden))
 
 a = Analysis(
     ["main.py"],

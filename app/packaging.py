@@ -49,12 +49,15 @@ def scan_script_imports(folder: str | Path = "scripts") -> set[str]:
 
     Соседние скрипты (``import vision`` внутри ``dota_logic``) зависимостями
     сборки не являются и отбрасываются, как и тяжёлые ML-пакеты.
+
+    Отбрасывается и пакетная форма (``scripts.vision``): бизнес-логика обязана
+    остаться обычными файлами рядом с .exe, иначе горячая замена потеряет смысл.
     """
     folder = Path(folder)
     if not folder.is_dir():
         return set()
 
-    local = {p.stem for p in folder.glob("*.py")}
+    local = {p.stem for p in folder.glob("*.py")} | {folder.name}
     found: set[str] = set()
     for path in sorted(folder.glob("*.py")):
         try:

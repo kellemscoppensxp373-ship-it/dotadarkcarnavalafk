@@ -35,6 +35,18 @@ def test_scanner_skips_sibling_scripts_and_heavy_ml():
     assert not any(n.split(".")[0] == "executor" for n in found)
     # Тяжёлый ML-стек в тонкую оболочку принципиально не входит.
     assert not (found & HEAVY)
+    # Пакетная форма тоже запрещена: иначе PyInstaller утянет логику внутрь .exe
+    # и горячая замена файлов перестанет работать.
+    assert not any(n.split(".")[0] == "scripts" for n in found), \
+        "бизнес-логика должна остаться снаружи"
+
+
+def test_spec_prints_are_ascii_only():
+    """Кириллица в print ломает сборку: консоль Windows не в UTF-8."""
+    spec = (SCRIPTS.parent / "DarkCarnival.spec").read_text(encoding="utf-8")
+    for line in spec.splitlines():
+        if line.startswith("print("):
+            assert line.isascii(), f"непечатаемая на Windows строка: {line}"
 
 
 def test_hiddenimports_cover_every_scanned_import():
