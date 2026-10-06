@@ -1,0 +1,134 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ----------------------------------------------------------------------------------
+  # Fast, dependency-light gate: the business logic is pure Python and must stay that
+  # way, so the whole suite runs on Linux in seconds without torch/Qt/CUDA.
+  # ----------------------------------------------------------------------------------
+  test:
+    name: Test (logic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov ruff
+
+      - name: Lint
+        run: ruff check scripts app main.py --output-format=github
+        continue-on-error: true
+
+      - name: Run test suite
+        run: pytest tests -v --cov=scripts --cov=app --cov-report=term-missing
+
+      - name: Verify external scripts are syntactically loadable
+        run: python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('scripts', quiet=1) else 1)"
+
+  # ----------------------------------------------------------------------------------
+  # Compile the thin GUI shell and pack the hot-swappable scripts BESIDE it.
+  # ----------------------------------------------------------------------------------
+  build:
+    name: Build EXE (windows-latest)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "PySide6>=6.6,<7" pyinstaller
+
+      - name: Compile GUI shell
+        run: pyinstaller DarkCarnival.spec --noconfirm --clean
+
+      - name: Pack hot-swappable scripts and assets beside the exe
+        shell: pwsh
+        run: |
+          $out = "dist/DarkCarnival"
+          # The whole point of the architecture: these stay as editable raw .py files.
+          Copy-Item -Recurse -Force scripts "$out/scripts"
+          Copy-Item -Recurse -Force assets  "$out/assets"
+          Copy-Item -Force requirements.txt "$out/requirements.txt"
+          Copy-Item -Force README.md        "$out/README.md"
+          Copy-Item -Force "ИНСТРУКЦИЯ.md"  "$out/ИНСТРУКЦИЯ.md"
+          # Полный режим (OCR) работает только из исходников - кладём удобный запускатор.
+          Copy-Item -Force "ЗАПУСК.bat"     "$out/ЗАПУСК.bat"
+          Copy-Item -Force main.py          "$out/main.py"
+          Copy-Item -Recurse -Force app     "$out/app"
+          Remove-Item -Recurse -Force "$out/app/__pycache__" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$out/data" | Out-Null
+          Remove-Item -Recurse -Force "$out/scripts/__pycache__" -ErrorAction SilentlyContinue
+          Get-ChildItem -Recurse $out | Select-Object FullName, Length
+
+      - name: Verify the exe and the external scripts shipped together
+        shell: pwsh
+        run: |
+          $out = "dist/DarkCarnival"
+          $required = @(
+            "$out/DarkCarnival.exe",
+            "$out/scripts/vision.py",
+            "$out/scripts/executor.py",
+            "$out/scripts/dota_logic.py",
+            "$out/scripts/tickets.py",
+            "$out/scripts/learning.py",
+            "$out/scripts/input_handler.py",
+            "$out/ЗАПУСК.bat",
+            "$out/ИНСТРУКЦИЯ.md",
+            "$out/main.py"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { Write-Error "missing artefacts: $missing"; exit 1 }
+          Write-Host "OK - shell + external scripts packaged"
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF -replace "refs/tags/","" } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          Compress-Archive -Path "dist/DarkCarnival/*" -DestinationPath "DarkCarnival-$version-win64.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkCarnival-win64
+          path: DarkCarnival-*.zip
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DarkCarnival-*.zip
+          generate_release_notes: true
+          body: |
+            ### Dark Carnival — Cognitive RPA
+
+            **Install:** unzip anywhere and run `DarkCarnival.exe`.
+
+            The `scripts/` folder next to the executable holds all business logic as raw
+            `.py` files. Edit them, or use **Dev Console → Apply & Reload** / 
+            **GitHub OTA → Sync** to hot-swap logic without reinstalling.

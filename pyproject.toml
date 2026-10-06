@@ -1,0 +1,33 @@
+[project]
+name = "dark-carnival-rpa"
+version = "1.0.0"
+description = "Cognitive RPA agent for the Dota 2 Dark Carnival co-op bots loop (Russian client)"
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "scripts", "tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",   # long lines are allowed in the Russian keyword tables
+    "B008",
+    "SIM105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117"]
+"DarkCarnival.spec" = ["F821"]   # PyInstaller injects Analysis/EXE/COLLECT
+
+[tool.coverage.run]
+source = ["scripts", "app"]
+omit = ["*/tests/*", "*/.venv/*"]

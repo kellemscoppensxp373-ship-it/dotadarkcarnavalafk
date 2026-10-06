@@ -1,0 +1,16 @@
+# --- GUI shell (compiled into the .exe) -------------------------------------
+PySide6>=6.6,<7
+
+# --- Cognitive vision (Phase 2) ---------------------------------------------
+easyocr>=1.7.1          # Russian + English OCR engine
+torch>=2.2              # EasyOCR backend
+torchvision>=0.17
+opencv-python>=4.9      # preprocessing + template matching (emoji/portrait)
+numpy>=1.26
+Pillow>=10.2
+mss>=9.0                # fast desktop capture
+
+# --- Input synthesis ---------------------------------------------------------
+pyautogui>=0.9.54
+pydirectinput>=1.0.4 ; sys_platform == "win32"   # DirectX-friendly input
+pyperclip>=1.8.2        # Cyrillic typing via clipboard
